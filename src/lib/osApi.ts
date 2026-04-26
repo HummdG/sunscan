@@ -78,7 +78,7 @@ async function queryNgdBuilding(
 
   if ('uprn' in params) {
     url.searchParams.set('filter', `uprn=${params.uprn}`)
-    url.searchParams.set('filter-lang', 'cql2-text')
+    url.searchParams.set('filter-lang', 'cql-text')
   } else {
     // ~60m × 60m bounding box around address point
     const { lat, lng } = params
