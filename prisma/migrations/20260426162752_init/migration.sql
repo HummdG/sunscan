@@ -1,0 +1,45 @@
+-- CreateTable
+CREATE TABLE "Report" (
+    "id" TEXT NOT NULL,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+    "quoteNumber" TEXT NOT NULL,
+    "addressRaw" TEXT NOT NULL,
+    "addressUprn" TEXT,
+    "lat" DOUBLE PRECISION NOT NULL,
+    "lng" DOUBLE PRECISION NOT NULL,
+    "postcode" TEXT NOT NULL,
+    "postcodeDistrict" TEXT NOT NULL,
+    "footprintGeojson" TEXT,
+    "footprintSource" TEXT NOT NULL,
+    "annualKwh" DOUBLE PRECISION NOT NULL,
+    "tariffPencePerKwh" DOUBLE PRECISION NOT NULL,
+    "standingChargePencePerDay" DOUBLE PRECISION NOT NULL,
+    "exportTariffPencePerKwh" DOUBLE PRECISION NOT NULL,
+    "billSource" TEXT NOT NULL,
+    "panelCount" INTEGER NOT NULL,
+    "systemSizeKw" DOUBLE PRECISION NOT NULL,
+    "panelSpecJson" TEXT NOT NULL,
+    "inverterSpecJson" TEXT NOT NULL,
+    "batterySpecJson" TEXT,
+    "mcsZone" TEXT NOT NULL,
+    "irradianceKwhPerM2" DOUBLE PRECISION NOT NULL,
+    "annualGenerationKwh" DOUBLE PRECISION NOT NULL,
+    "selfConsumptionKwh" DOUBLE PRECISION NOT NULL,
+    "exportKwh" DOUBLE PRECISION NOT NULL,
+    "annualSavingsPounds" DOUBLE PRECISION NOT NULL,
+    "paybackYears" DOUBLE PRECISION NOT NULL,
+    "co2SavedTonnesPerYear" DOUBLE PRECISION NOT NULL,
+    "monthlyGenJson" TEXT NOT NULL,
+    "twentyFiveYearJson" TEXT NOT NULL,
+    "assumptionsJson" TEXT NOT NULL,
+    "panelLayoutJson" TEXT NOT NULL DEFAULT '[]',
+    "model3dImageUrl" TEXT,
+    "pdfUrl" TEXT,
+    "status" TEXT NOT NULL DEFAULT 'draft',
+
+    CONSTRAINT "Report_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateIndex
+CREATE UNIQUE INDEX "Report_quoteNumber_key" ON "Report"("quoteNumber");
