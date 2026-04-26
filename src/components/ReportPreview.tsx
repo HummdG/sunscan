@@ -6,6 +6,8 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
 import { EstimatedBadge } from './EstimatedBadge'
+import { RoofIsometricViewer } from './RoofIsometricViewer'
+import { wgs84ToLocalMetres, polygonCentroid } from '@/lib/geometry'
 import {
   MonthlyGenChart,
   SelfConsumptionDonut,
@@ -43,9 +45,22 @@ function StatCard({
   )
 }
 
-export function ReportPreview({ data, pdfUrl }: ReportPreviewProps) {
+export function ReportPreview({ data }: ReportPreviewProps) {
   const isEstimatedBill = data.billSource === 'default'
   const isEstimatedFootprint = data.footprintSource === 'estimated'
+
+  // Parse footprint for the live schematic viewer
+  let polygonLocalM: [number, number][] | null = null
+  if (data.footprintGeojson) {
+    try {
+      const geojson = JSON.parse(data.footprintGeojson) as { type: string; coordinates: number[][][] }
+      const ring = geojson.coordinates[0] as [number, number][]
+      const centre = polygonCentroid(ring)
+      polygonLocalM = wgs84ToLocalMetres(ring, centre)
+    } catch {
+      // geojson parse error — fall through to null
+    }
+  }
   const annualBillBefore = (data.annualKwh * data.tariffPencePerKwh) / 100 + (data.standingChargePencePerDay * 365) / 100
   const annualBillAfter = annualBillBefore - data.results.annualSavingsPounds
 
@@ -65,14 +80,12 @@ export function ReportPreview({ data, pdfUrl }: ReportPreviewProps) {
               Quote {data.quoteNumber} · {new Date(data.createdAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}
             </p>
           </div>
-          {pdfUrl && (
-            <a href={pdfUrl} target="_blank" rel="noopener noreferrer">
-              <Button variant="secondary" className="gap-2">
-                <Download className="h-4 w-4" />
-                Download PDF
-              </Button>
-            </a>
-          )}
+          <a href={`/api/report/${data.id}/pdf`} target="_blank" rel="noopener noreferrer">
+            <Button variant="secondary" className="gap-2">
+              <Download className="h-4 w-4" />
+              Download PDF
+            </Button>
+          </a>
         </div>
 
         {(isEstimatedBill || isEstimatedFootprint) && (
@@ -97,23 +110,23 @@ export function ReportPreview({ data, pdfUrl }: ReportPreviewProps) {
         </div>
       </div>
 
-      {/* ── 3D Model image ───────────────────────────────────────────────── */}
-      {data.model3dImageUrl && (
-        <div>
-          <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
-            3D Visualisation
-            {isEstimatedFootprint && <EstimatedBadge reason="Building footprint is estimated from address coordinates. A site survey will verify the exact roof layout." />}
-          </h2>
-          <div className="rounded-xl overflow-hidden border">
-            <img
-              src={data.model3dImageUrl}
-              alt="3D solar panel layout"
-              className="w-full object-cover"
-              style={{ maxHeight: 320 }}
-            />
-          </div>
-        </div>
-      )}
+      {/* ── Roof schematic ───────────────────────────────────────────────── */}
+      <div>
+        <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
+          Roof Schematic
+          {isEstimatedFootprint && <EstimatedBadge reason="Building footprint is estimated from address coordinates. A site survey will verify the exact roof layout." />}
+        </h2>
+        {polygonLocalM ? (
+          <RoofIsometricViewer
+            polygonLocalM={polygonLocalM}
+            wallHeightM={5.5}
+            roofPitchDeg={data.assumptions.roofPitchDeg}
+            source={data.footprintSource}
+          />
+        ) : (
+          <p className="text-sm text-muted-foreground">No building footprint data available.</p>
+        )}
+      </div>
 
       {/* ── System components ────────────────────────────────────────────── */}
       <div>

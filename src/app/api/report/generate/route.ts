@@ -47,7 +47,6 @@ const BodySchema = z.object({
   billSource: z.enum(['ocr', 'manual', 'default']),
   assumptions: AssumptionsSchema,
   model3dImageBase64: z.string().optional(),
-  chartImagesBase64: z.array(z.string()).optional(),
 })
 
 // ─── Default specs ────────────────────────────────────────────────────────────
@@ -216,7 +215,6 @@ export async function POST(request: NextRequest) {
       const pdfBuffer = await generateReportPdf(
         fullReportData,
         data.model3dImageBase64,
-        data.chartImagesBase64,
       )
 
       // Try uploading to Supabase Storage

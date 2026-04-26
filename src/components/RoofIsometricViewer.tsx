@@ -1,6 +1,6 @@
 'use client'
 
-import { useRef, useCallback } from 'react'
+import { useRef, useCallback, useEffect } from 'react'
 import { Camera } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import type { RoofAspect } from '@/lib/types'
@@ -139,7 +139,7 @@ export function RoofIsometricViewer({
   // ── Visible walls (SE view in ridge-aligned space) ────────────────────────
   // SE camera = +r and +p direction. For CCW polygon, edge visible if dp − dr > 0.
 
-  const isCCW = polygonSignedArea(polygonLocalM) > 0
+  const isCCW = polygonSignedArea(rpPoly) > 0
   const n = rpPoly.length
 
   interface WallEdge { r1: number; p1: number; r2: number; p2: number; depth: number }
@@ -221,6 +221,55 @@ export function RoofIsometricViewer({
   const [lMaxX, lMaxY] = centroid(c3, c2, re1, re0)  // p_max (south) slope
   const [lMinX, lMinY] = centroid(c0, c1, re1, re0)  // p_min (north) slope
 
+  // ── Compass rotation ─────────────────────────────────────────────────────
+  // Project the world "north" direction (-z) through (r,p) → isoRP to find
+  // the SVG angle at which north appears, then rotate the compass rose to match.
+  const rNorth = -rdZ
+  const pNorth = -pdZ
+  const [cxNorth, cyNorth] = isoRP(rNorth, 0, pNorth)
+  const compassRotDeg = Math.atan2(cxNorth, -cyNorth) * (180 / Math.PI)
+
+  // ── Solar panels on south slope ──────────────────────────────────────────
+  function roofYatP(p: number): number {
+    return wH + ((pMax - p) / (pMax - pCenter)) * ridgeRise
+  }
+
+  const showPanels = pMaxLabel === 'S'
+  const panelW = 1.0      // metres along ridge
+  const panelH = 1.6      // metres along p (toward ridge)
+  const panelGapR = 0.06
+  const panelGapP = 0.06
+  const solarRMin = rMin + margin + 0.5
+  const solarRMax = rMax - margin - 0.5
+  const solarPMin = pCenter + 0.4
+  const solarPMax = pMax - 0.4
+
+  const nPanelCols = Math.max(0, Math.floor((solarRMax - solarRMin + panelGapR) / (panelW + panelGapR)))
+  const nPanelRows = Math.max(0, Math.floor((solarPMax - solarPMin + panelGapP) / (panelH + panelGapP)))
+  const totalSolarW = nPanelCols * (panelW + panelGapR) - panelGapR
+  const solarRStart = (solarRMin + solarRMax) / 2 - totalSolarW / 2
+
+  interface PanelQuad { tl: P3; tr: P3; br: P3; bl: P3 }
+  const solarPanels: PanelQuad[] = []
+
+  if (showPanels) {
+    for (let row = 0; row < nPanelRows; row++) {
+      const pBottom = solarPMax - row * (panelH + panelGapP)
+      const pTop = pBottom - panelH
+      if (pTop < solarPMin) break
+      for (let col = 0; col < nPanelCols; col++) {
+        const r1 = solarRStart + col * (panelW + panelGapR)
+        const r2 = r1 + panelW
+        solarPanels.push({
+          bl: [r1, roofYatP(pBottom), pBottom],
+          br: [r2, roofYatP(pBottom), pBottom],
+          tr: [r2, roofYatP(pTop),    pTop],
+          tl: [r1, roofYatP(pTop),    pTop],
+        })
+      }
+    }
+  }
+
   // ── Capture ────────────────────────────────────────────────────────────────
 
   const handleCapture = useCallback(() => {
@@ -239,6 +288,15 @@ export function RoofIsometricViewer({
     }
     img.src = url
   }, [onCapture])
+
+  // Auto-capture once on mount so the image is always available for the PDF
+  // even if the user never clicks the manual "Capture View" button.
+  useEffect(() => {
+    if (!onCapture) return
+    const id = setTimeout(handleCapture, 300)
+    return () => clearTimeout(id)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []) // intentionally omit deps — fires once on mount only
 
   // ── Render ─────────────────────────────────────────────────────────────────
 
@@ -327,6 +385,18 @@ export function RoofIsometricViewer({
           strokeLinejoin="round"
         />
 
+        {/* 7. Solar panels on south slope */}
+        {solarPanels.map(({ bl, br, tr, tl }, i) => (
+          <polygon
+            key={`panel-${i}`}
+            points={polyStr(bl, br, tr, tl)}
+            fill="#1e3a5f"
+            stroke="#94c4ff"
+            strokeWidth="0.5"
+            strokeLinejoin="round"
+          />
+        ))}
+
         {/* Ridge line */}
         <line
           x1={rx0} y1={ry0} x2={rx1} y2={ry1}
@@ -356,17 +426,19 @@ export function RoofIsometricViewer({
           </text>
         ))}
 
-        {/* Compass rose — top right */}
+        {/* Compass rose — top right, needle rotated to show true north */}
         <g transform={`translate(${SVG_W - 52}, 52)`}>
           <circle r="38" fill="white" fillOpacity="0.93" stroke="#cbd5e1" strokeWidth="1.2" />
-          <line x1="0" y1="-20" x2="0" y2="20" stroke="#e2e8f0" strokeWidth="1" />
-          <line x1="-20" y1="0" x2="20" y2="0" stroke="#e2e8f0" strokeWidth="1" />
-          <polygon points="0,-26 4,-12 -4,-12" fill="#1e3a5f" />
-          <text textAnchor="middle" y="-16" fontSize="10" fontWeight="700" fill="#1e3a5f" fontFamily="system-ui">N</text>
-          <polygon points="0,26 4,12 -4,12" fill="#94a3b8" />
-          <text textAnchor="middle" y="34" fontSize="10" fill="#64748b" fontFamily="system-ui">S</text>
-          <text x="-30" y="4" textAnchor="middle" fontSize="10" fill="#64748b" fontFamily="system-ui">W</text>
-          <text x="30" y="4" textAnchor="middle" fontSize="10" fill="#64748b" fontFamily="system-ui">E</text>
+          <g transform={`rotate(${compassRotDeg.toFixed(1)})`}>
+            <line x1="0" y1="-20" x2="0" y2="20" stroke="#e2e8f0" strokeWidth="1" />
+            <line x1="-20" y1="0" x2="20" y2="0" stroke="#e2e8f0" strokeWidth="1" />
+            <polygon points="0,-26 4,-12 -4,-12" fill="#1e3a5f" />
+            <text textAnchor="middle" y="-16" fontSize="10" fontWeight="700" fill="#1e3a5f" fontFamily="system-ui">N</text>
+            <polygon points="0,26 4,12 -4,12" fill="#94a3b8" />
+            <text textAnchor="middle" y="34" fontSize="10" fill="#64748b" fontFamily="system-ui">S</text>
+            <text x="-30" y="4" textAnchor="middle" fontSize="10" fill="#64748b" fontFamily="system-ui">W</text>
+            <text x="30" y="4" textAnchor="middle" fontSize="10" fill="#64748b" fontFamily="system-ui">E</text>
+          </g>
         </g>
 
         {/* Legend — bottom left */}

@@ -9,6 +9,12 @@ import {
   Font,
 } from '@react-pdf/renderer'
 import type { ReportData } from '@/lib/types'
+import {
+  PdfMonthlyGenChart,
+  PdfSelfConsumptionDonut,
+  PdfCumulativeSavingsChart,
+  PdfBillSavingsChart,
+} from './PdfCharts'
 
 // ─── Styles ───────────────────────────────────────────────────────────────────
 
@@ -225,17 +231,14 @@ function DataRow({ label, value, estimated }: { label: string; value: string; es
   )
 }
 
-const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
-
 // ─── Main document ─────────────────────────────────────────────────────────────
 
 interface ReportDocumentProps {
   data: ReportData
   model3dImage?: string
-  chartImages?: string[]
 }
 
-export function ReportDocument({ data, model3dImage, chartImages }: ReportDocumentProps) {
+export function ReportDocument({ data, model3dImage }: ReportDocumentProps) {
   const isEstimatedBill = data.billSource === 'default'
   const isEstimatedFootprint = data.footprintSource === 'estimated'
   const annualBillBefore = (data.annualKwh * data.tariffPencePerKwh) / 100 + (data.standingChargePencePerDay * 365) / 100
@@ -338,34 +341,15 @@ export function ReportDocument({ data, model3dImage, chartImages }: ReportDocume
           <DataRow label="Exported to Grid" value={`${data.results.exportKwh.toLocaleString()} kWh`} />
 
           <Text style={styles.subHeader}>Monthly Generation (kWh)</Text>
-          {chartImages?.[0] ? (
-            <Image src={chartImages[0]} style={{ width: '100%', height: 160, objectFit: 'contain' }} />
-          ) : (
-            <View style={[styles.tableHeader, { marginBottom: 0 }]}>
-              {MONTHS.slice(0, 6).map((m) => (
-                <Text key={m} style={styles.tableHeaderCell}>{m}</Text>
-              ))}
-            </View>
-          )}
-          {!chartImages?.[0] && (
-            <>
-              <View style={styles.tableRow}>
-                {data.results.monthlyGenKwh.slice(0, 6).map((v, i) => (
-                  <Text key={i} style={styles.tableCell}>{v}</Text>
-                ))}
-              </View>
-              <View style={[styles.tableHeader, { marginTop: 4, marginBottom: 0 }]}>
-                {MONTHS.slice(6).map((m) => (
-                  <Text key={m} style={styles.tableHeaderCell}>{m}</Text>
-                ))}
-              </View>
-              <View style={styles.tableRow}>
-                {data.results.monthlyGenKwh.slice(6).map((v, i) => (
-                  <Text key={i} style={styles.tableCell}>{v}</Text>
-                ))}
-              </View>
-            </>
-          )}
+          <PdfMonthlyGenChart monthlyKwh={data.results.monthlyGenKwh} />
+
+          <Text style={styles.subHeader}>Energy Use Breakdown</Text>
+          <View style={{ alignItems: 'center' }}>
+            <PdfSelfConsumptionDonut
+              selfKwh={data.results.selfConsumptionKwh}
+              exportKwh={data.results.exportKwh}
+            />
+          </View>
         </View>
         <Text style={styles.pageNumber} render={({ pageNumber, totalPages }) => `${pageNumber} / ${totalPages}`} fixed />
       </Page>
@@ -381,18 +365,17 @@ export function ReportDocument({ data, model3dImage, chartImages }: ReportDocume
           <DataRow label="Annual Saving" value={`£${data.results.annualSavingsPounds.toLocaleString()}`} />
           <DataRow label="Unit Rate" value={`${data.tariffPencePerKwh}p/kWh`} estimated={isEstimatedBill} />
           <DataRow label="Export Tariff (SEG)" value={`${data.exportTariffPencePerKwh}p/kWh`} />
+          <View style={{ alignItems: 'center', marginTop: 4, marginBottom: 4 }}>
+            <PdfBillSavingsChart before={annualBillBefore} after={annualBillAfter} />
+          </View>
 
           <Text style={styles.subHeader}>Investment & Payback</Text>
           <DataRow label="System Cost (inc. installation)" value={`£${data.assumptions.systemCostPounds.toLocaleString()}`} />
           <DataRow label="Simple Payback Period" value={`${data.results.paybackYears} years`} />
           <DataRow label="25-Year Net Saving" value={`£${(data.results.twentyFiveYearSavings[24]?.cumulative ?? 0).toLocaleString()}`} />
 
-          {chartImages?.[1] && (
-            <View style={{ marginTop: 16 }}>
-              <Text style={styles.subHeader}>Cumulative Savings Over 25 Years</Text>
-              <Image src={chartImages[1]} style={{ width: '100%', height: 160, objectFit: 'contain' }} />
-            </View>
-          )}
+          <Text style={styles.subHeader}>Cumulative Savings Over 25 Years</Text>
+          <PdfCumulativeSavingsChart savings={data.results.twentyFiveYearSavings} />
         </View>
         <Text style={styles.pageNumber} render={({ pageNumber, totalPages }) => `${pageNumber} / ${totalPages}`} fixed />
       </Page>
