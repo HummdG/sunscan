@@ -128,6 +128,52 @@ export function calc25YearSavings(
 }
 
 /**
+ * Google Solar API override: accepts pre-computed DC generation from Google's models.
+ * Shading is already modelled by Google — only apply inverter + system losses.
+ */
+export function runSolarCalculationsFromGoogleData(
+  yearlyEnergyDcKwh: number,
+  panelCount: number,
+  panelCapacityWatts: number,
+  annualDemandKwh: number,
+  tariffPencePerKwh: number,
+  assumptions: SolarAssumptions,
+): SolarResults {
+  const pr = (1 - assumptions.inverterLoss) * (1 - assumptions.systemLoss)
+  const annualGenerationKwh = yearlyEnergyDcKwh * pr
+  const { selfConsumptionKwh, exportKwh, selfConsumptionRate } = calcSelfConsumption(
+    annualGenerationKwh,
+    annualDemandKwh,
+    assumptions.hasBattery,
+    assumptions.batteryKwh,
+  )
+  const annualSavingsPounds = calcAnnualSavings(
+    selfConsumptionKwh,
+    exportKwh,
+    tariffPencePerKwh,
+    assumptions.exportTariffPencePerKwh,
+  )
+  const paybackYears = calcPayback(assumptions.systemCostPounds, annualSavingsPounds)
+  const co2SavedTonnesPerYear = calcCo2Saved(annualGenerationKwh)
+  const monthlyGenKwh = calcMonthlyGenProfile(annualGenerationKwh)
+  const twentyFiveYearSavings = calc25YearSavings(annualSavingsPounds, assumptions.systemCostPounds)
+
+  void panelCapacityWatts // available for future system size display
+
+  return {
+    annualGenerationKwh: Math.round(annualGenerationKwh),
+    selfConsumptionKwh: Math.round(selfConsumptionKwh),
+    exportKwh: Math.round(exportKwh),
+    selfConsumptionRate,
+    annualSavingsPounds: Math.round(annualSavingsPounds),
+    paybackYears: Math.round(paybackYears * 10) / 10,
+    co2SavedTonnesPerYear: Math.round(co2SavedTonnesPerYear * 100) / 100,
+    monthlyGenKwh,
+    twentyFiveYearSavings,
+  }
+}
+
+/**
  * Master function: given all inputs, return all SolarResults.
  */
 export function runSolarCalculations(

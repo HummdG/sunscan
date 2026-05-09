@@ -2,11 +2,26 @@ import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 import { prisma } from '@/lib/db'
 import { getZoneForPostcode, getIrradianceKwhPerM2 } from '@/lib/mcs'
-import { runSolarCalculations, DEFAULT_PANEL, DEFAULT_ASSUMPTIONS } from '@/lib/solarCalculations'
+import {
+  runSolarCalculations,
+  runSolarCalculationsFromGoogleData,
+  DEFAULT_PANEL,
+  DEFAULT_ASSUMPTIONS,
+  calcAnnualGeneration,
+  calcSystemSizeKw,
+} from '@/lib/solarCalculations'
 import { estimateRoofPlanes, getBestRoofPlane, wgs84ToLocalMetres, polygonCentroid, polygonArea } from '@/lib/geometry'
 import { calculatePanelLayout } from '@/lib/panelLayout'
 import { generateReportPdf, generateQuoteNumber } from '@/lib/reportGenerator'
-import type { InverterSpec, PanelSpec, BatterySpec, ReportData, SolarAssumptions } from '@/lib/types'
+import { selectOptimalPanelConfig } from '@/lib/googleSolarApi'
+import type {
+  InverterSpec,
+  PanelSpec,
+  BatterySpec,
+  ReportData,
+  SolarAssumptions,
+  GoogleSolarBuildingInsights,
+} from '@/lib/types'
 import { createClient } from '@supabase/supabase-js'
 
 // ─── Supabase Storage client (server-side only) ──────────────────────────────
@@ -39,13 +54,14 @@ const BodySchema = z.object({
   lng: z.number(),
   postcode: z.string().min(1),
   footprintGeojson: z.string().nullable(),
-  footprintSource: z.enum(['os_ngd', 'estimated']),
+  footprintSource: z.enum(['os_ngd', 'estimated', 'google_solar']),
   annualKwh: z.number().min(100).max(100000),
   tariffPencePerKwh: z.number().min(1).max(100),
   standingChargePencePerDay: z.number().min(0).max(200),
   exportTariffPencePerKwh: z.number().min(0).max(50),
   billSource: z.enum(['ocr', 'manual', 'default']),
   assumptions: AssumptionsSchema,
+  solarApiJson: z.string().optional(),
   model3dImageBase64: z.string().optional(),
 })
 
@@ -80,7 +96,7 @@ export async function POST(request: NextRequest) {
     const data = parsed.data
     const assumptions: SolarAssumptions = data.assumptions
 
-    // ── 1. MCS zone + irradiance ─────────────────────────────────────────
+    // ── 1. MCS zone + irradiance (always computed — used as verification) ──
     const postcodeDistrict = data.postcode.replace(/\s+/g, '').toUpperCase().slice(0, 4)
     const mcsZone = getZoneForPostcode(data.postcode)
     const irradianceKwhPerM2 = getIrradianceKwhPerM2(
@@ -89,52 +105,135 @@ export async function POST(request: NextRequest) {
       assumptions.roofOrientationDeg,
     )
 
-    // ── 2. Building footprint → roof planes → panel layout ───────────────
-    let footprintLocal: [number, number][]
-    let centre: [number, number] = [data.lng, data.lat]
+    // ── 2. Determine panel count + generation source ──────────────────────
 
-    const FALLBACK_FOOTPRINT: [number, number][] = [[-5, -4], [5, -4], [5, 4], [-5, 4], [-5, -4]]
+    let panelCount = 0
+    let systemSizeKw = 0
+    let panelSpec: PanelSpec = DEFAULT_PANEL
+    let panelPositions: ReturnType<typeof calculatePanelLayout>['positions'] = []
+    let solarInsights: GoogleSolarBuildingInsights | null = null
+    let solarCoveragePercent: number | null = null
+    let imageryQuality: string | null = null
+    let mcsGenerationKwh: number | null = null
 
-    if (data.footprintGeojson) {
-      const geojson = JSON.parse(data.footprintGeojson) as { type: string; coordinates: number[][][] }
-      const ring = geojson.coordinates[0] as [number, number][]
-      centre = polygonCentroid(ring)
-      footprintLocal = wgs84ToLocalMetres(ring, centre)
-      // Guard against degenerate polygons (zero/near-zero area) that produce 0 panels
-      if (polygonArea(footprintLocal) < 10) {
-        console.warn('Degenerate footprint (area < 10 m²) — falling back to 10×8 m rectangle')
-        footprintLocal = FALLBACK_FOOTPRINT
+    if (data.solarApiJson) {
+      // ── Google Solar primary path ──────────────────────────────────────
+      try {
+        solarInsights = JSON.parse(data.solarApiJson) as GoogleSolarBuildingInsights
+        const sp = solarInsights.solarPotential
+        imageryQuality = solarInsights.imageryQuality ?? null
+
+        const optimalConfig = selectOptimalPanelConfig(
+          sp.solarPanelConfigs,
+          data.annualKwh,
+          assumptions.inverterLoss,
+          assumptions.systemLoss,
+        )
+
+        if (optimalConfig) {
+          panelCount = optimalConfig.panelsCount
+          panelSpec = {
+            widthMm: Math.round(sp.panelWidthMeters * 1000),
+            heightMm: Math.round(sp.panelHeightMeters * 1000),
+            depthMm: 30,
+            wattPeak: sp.panelCapacityWatts,
+            modelName: `Google Solar ${sp.panelCapacityWatts}W Panel`,
+          }
+          systemSizeKw = (panelCount * sp.panelCapacityWatts) / 1000
+        } else {
+          // Fallback: use max panels from Solar API
+          panelCount = sp.maxArrayPanelsCount
+          panelSpec = {
+            widthMm: Math.round(sp.panelWidthMeters * 1000),
+            heightMm: Math.round(sp.panelHeightMeters * 1000),
+            depthMm: 30,
+            wattPeak: sp.panelCapacityWatts,
+            modelName: `Google Solar ${sp.panelCapacityWatts}W Panel`,
+          }
+          systemSizeKw = (panelCount * sp.panelCapacityWatts) / 1000
+        }
+
+        // MCS comparison figure
+        mcsGenerationKwh = Math.round(
+          calcAnnualGeneration(systemSizeKw, irradianceKwhPerM2, assumptions),
+        )
+      } catch (parseErr) {
+        console.error('Failed to parse solarApiJson', parseErr)
+        // Fall through to legacy path
+        solarInsights = null
       }
-    } else {
-      footprintLocal = FALLBACK_FOOTPRINT
     }
 
-    const roofPlanes = estimateRoofPlanes(footprintLocal, assumptions.roofPitchDeg)
-    const bestPlane = getBestRoofPlane(roofPlanes)
-    const { positions: panelPositions, count: panelCount } = calculatePanelLayout(
-      bestPlane,
-      DEFAULT_PANEL,
-    )
+    if (!solarInsights) {
+      // ── Legacy path: OS NGD footprint → estimated roof planes ──────────
+      let footprintLocal: [number, number][]
 
-    // ── 3. Solar calculations ────────────────────────────────────────────
-    const results = runSolarCalculations(
-      panelCount,
-      DEFAULT_PANEL,
-      irradianceKwhPerM2,
-      data.annualKwh,
-      assumptions,
-    )
+      const FALLBACK_FOOTPRINT: [number, number][] = [[-5, -4], [5, -4], [5, 4], [-5, 4], [-5, -4]]
 
-    // Patch: use actual tariff from bill data (runSolarCalculations uses a placeholder)
-    const selfSaving = (results.selfConsumptionKwh * data.tariffPencePerKwh) / 100
-    const exportEarning = (results.exportKwh * assumptions.exportTariffPencePerKwh) / 100
-    results.annualSavingsPounds = Math.round(selfSaving + exportEarning)
-    results.paybackYears =
-      results.annualSavingsPounds > 0
-        ? Math.round((assumptions.systemCostPounds / results.annualSavingsPounds) * 10) / 10
-        : 99
+      if (data.footprintGeojson) {
+        const geojson = JSON.parse(data.footprintGeojson) as { type: string; coordinates: number[][][] }
+        const ring = geojson.coordinates[0] as [number, number][]
+        const centre = polygonCentroid(ring)
+        footprintLocal = wgs84ToLocalMetres(ring, centre)
+        if (polygonArea(footprintLocal) < 10) {
+          console.warn('Degenerate footprint — falling back to 10×8 m rectangle')
+          footprintLocal = FALLBACK_FOOTPRINT
+        }
+      } else {
+        footprintLocal = FALLBACK_FOOTPRINT
+      }
 
-    // ── 4. Build ReportData ──────────────────────────────────────────────
+      const roofPlanes = estimateRoofPlanes(footprintLocal, assumptions.roofPitchDeg)
+      const bestPlane = getBestRoofPlane(roofPlanes)
+      const layout = calculatePanelLayout(bestPlane, DEFAULT_PANEL)
+      panelCount = layout.count
+      panelPositions = layout.positions
+      systemSizeKw = calcSystemSizeKw(panelCount, DEFAULT_PANEL)
+      panelSpec = DEFAULT_PANEL
+    }
+
+    // ── 3. Solar calculations ─────────────────────────────────────────────
+    let results
+
+    if (solarInsights) {
+      const sp = solarInsights.solarPotential
+      const optimalConfig = selectOptimalPanelConfig(
+        sp.solarPanelConfigs,
+        data.annualKwh,
+        assumptions.inverterLoss,
+        assumptions.systemLoss,
+      )
+      const yearlyDc = optimalConfig?.yearlyEnergyDcKwh ?? (panelCount * sp.panelCapacityWatts / 1000 * irradianceKwhPerM2)
+
+      results = runSolarCalculationsFromGoogleData(
+        yearlyDc,
+        panelCount,
+        sp.panelCapacityWatts,
+        data.annualKwh,
+        data.tariffPencePerKwh,
+        assumptions,
+      )
+
+      solarCoveragePercent = Math.round((results.annualGenerationKwh / data.annualKwh) * 1000) / 10
+    } else {
+      results = runSolarCalculations(
+        panelCount,
+        panelSpec,
+        irradianceKwhPerM2,
+        data.annualKwh,
+        assumptions,
+      )
+      // Patch tariff
+      const selfSaving = (results.selfConsumptionKwh * data.tariffPencePerKwh) / 100
+      const exportEarning = (results.exportKwh * assumptions.exportTariffPencePerKwh) / 100
+      results.annualSavingsPounds = Math.round(selfSaving + exportEarning)
+      results.paybackYears =
+        results.annualSavingsPounds > 0
+          ? Math.round((assumptions.systemCostPounds / results.annualSavingsPounds) * 10) / 10
+          : 99
+    }
+
+    // ── 4. Build ReportData ───────────────────────────────────────────────
     const reportData: Omit<ReportData, 'id' | 'quoteNumber' | 'createdAt' | 'pdfUrl' | 'model3dImageUrl'> = {
       addressRaw: data.addressRaw,
       lat: data.lat,
@@ -148,17 +247,21 @@ export async function POST(request: NextRequest) {
       exportTariffPencePerKwh: data.exportTariffPencePerKwh,
       billSource: data.billSource,
       panelCount,
-      systemSizeKw: (panelCount * DEFAULT_PANEL.wattPeak) / 1000,
-      panelSpec: DEFAULT_PANEL,
+      systemSizeKw,
+      panelSpec,
       inverterSpec: DEFAULT_INVERTER,
       batterySpec: assumptions.hasBattery ? DEFAULT_BATTERY : null,
       mcsZone,
       irradianceKwhPerM2,
       results,
       assumptions,
+      solarApiData: solarInsights,
+      solarCoveragePercent,
+      imageryQuality: imageryQuality as 'HIGH' | 'MEDIUM' | 'LOW' | null,
+      mcsGenerationKwh,
     }
 
-    // ── 5. Save to DB ────────────────────────────────────────────────────
+    // ── 5. Save to DB ─────────────────────────────────────────────────────
     const existingCount = await prisma.report.count()
     const quoteNumber = generateQuoteNumber(existingCount + 1)
 
@@ -179,8 +282,8 @@ export async function POST(request: NextRequest) {
         exportTariffPencePerKwh: data.exportTariffPencePerKwh,
         billSource: data.billSource,
         panelCount,
-        systemSizeKw: reportData.systemSizeKw,
-        panelSpecJson: JSON.stringify(DEFAULT_PANEL),
+        systemSizeKw,
+        panelSpecJson: JSON.stringify(panelSpec),
         inverterSpecJson: JSON.stringify(DEFAULT_INVERTER),
         batterySpecJson: assumptions.hasBattery ? JSON.stringify(DEFAULT_BATTERY) : null,
         mcsZone,
@@ -195,12 +298,18 @@ export async function POST(request: NextRequest) {
         twentyFiveYearJson: JSON.stringify(results.twentyFiveYearSavings),
         assumptionsJson: JSON.stringify(assumptions),
         panelLayoutJson: JSON.stringify(panelPositions),
-        model3dImageUrl: data.model3dImageBase64 ? `data:image/png;base64,${data.model3dImageBase64.replace(/^data:image\/\w+;base64,/, '')}` : null,
+        model3dImageUrl: data.model3dImageBase64
+          ? `data:image/png;base64,${data.model3dImageBase64.replace(/^data:image\/\w+;base64,/, '')}`
+          : null,
         status: 'draft',
+        solarApiJson: data.solarApiJson ?? null,
+        solarCoveragePercent,
+        imageryQuality,
+        mcsGenerationKwh,
       },
     })
 
-    // ── 6. Generate PDF ──────────────────────────────────────────────────
+    // ── 6. Generate PDF ───────────────────────────────────────────────────
     const fullReportData: ReportData = {
       ...reportData,
       id: report.id,
@@ -212,33 +321,25 @@ export async function POST(request: NextRequest) {
 
     let pdfUrl: string | null = null
     try {
-      const pdfBuffer = await generateReportPdf(
-        fullReportData,
-        data.model3dImageBase64,
-      )
+      const pdfBuffer = await generateReportPdf(fullReportData, data.model3dImageBase64)
 
-      // Try uploading to Supabase Storage
       const supabase = getSupabaseAdmin()
       if (supabase) {
         const fileName = `${report.id}.pdf`
         const { error } = await supabase.storage
           .from('sunscan-reports')
-          .upload(fileName, pdfBuffer, {
-            contentType: 'application/pdf',
-            upsert: true,
-          })
+          .upload(fileName, pdfBuffer, { contentType: 'application/pdf', upsert: true })
 
         if (!error) {
           const { data: urlData } = await supabase.storage
             .from('sunscan-reports')
-            .createSignedUrl(fileName, 60 * 60 * 24 * 7) // 7-day expiry
+            .createSignedUrl(fileName, 60 * 60 * 24 * 7)
           pdfUrl = urlData?.signedUrl ?? null
         } else {
           console.error('Supabase Storage upload error:', error)
         }
       }
 
-      // Update DB with PDF URL
       if (pdfUrl) {
         await prisma.report.update({
           where: { id: report.id },
@@ -247,14 +348,9 @@ export async function POST(request: NextRequest) {
       }
     } catch (pdfErr) {
       console.error('PDF generation error:', pdfErr)
-      // Non-fatal: report still accessible in browser
     }
 
-    return NextResponse.json({
-      reportId: report.id,
-      pdfUrl,
-      quoteNumber,
-    })
+    return NextResponse.json({ reportId: report.id, pdfUrl, quoteNumber })
   } catch (err) {
     console.error('/api/report/generate error:', err)
     return NextResponse.json({ error: 'Report generation failed' }, { status: 500 })

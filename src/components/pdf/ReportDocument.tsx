@@ -1,4 +1,4 @@
-import React from 'react'
+﻿import React from 'react'
 import {
   Document,
   Page,
@@ -250,7 +250,7 @@ export function ReportDocument({ data, model3dImage }: ReportDocumentProps) {
       author="SunScan"
       subject="Solar PV Proposal"
     >
-      {/* ── Cover Page ──────────────────────────────────────────────────── */}
+       $args[0].Value -replace '─+', '-' -replace '─', '-' 
       <Page size="A4" style={styles.page}>
         <View style={styles.coverPage}>
           <Text style={styles.coverTitle}>☀ SunScan</Text>
@@ -267,7 +267,7 @@ export function ReportDocument({ data, model3dImage }: ReportDocumentProps) {
         </View>
       </Page>
 
-      {/* ── System Summary ───────────────────────────────────────────────── */}
+       $args[0].Value -replace '─+', '-' -replace '─', '-' 
       <Page size="A4" style={styles.page}>
         <View style={styles.sectionPage}>
           <PageHeader title="Recommended Solar System" />
@@ -295,7 +295,7 @@ export function ReportDocument({ data, model3dImage }: ReportDocumentProps) {
         <Text style={styles.pageNumber} render={({ pageNumber, totalPages }) => `${pageNumber} / ${totalPages}`} fixed />
       </Page>
 
-      {/* ── System Components ────────────────────────────────────────────── */}
+       $args[0].Value -replace '─+', '-' -replace '─', '-' 
       <Page size="A4" style={styles.page}>
         <View style={styles.sectionPage}>
           <PageHeader title="System Components" />
@@ -323,7 +323,7 @@ export function ReportDocument({ data, model3dImage }: ReportDocumentProps) {
         <Text style={styles.pageNumber} render={({ pageNumber, totalPages }) => `${pageNumber} / ${totalPages}`} fixed />
       </Page>
 
-      {/* ── System Performance ───────────────────────────────────────────── */}
+       $args[0].Value -replace '─+', '-' -replace '─', '-' 
       <Page size="A4" style={styles.page}>
         <View style={styles.sectionPage}>
           <PageHeader title="System Performance" />
@@ -354,7 +354,7 @@ export function ReportDocument({ data, model3dImage }: ReportDocumentProps) {
         <Text style={styles.pageNumber} render={({ pageNumber, totalPages }) => `${pageNumber} / ${totalPages}`} fixed />
       </Page>
 
-      {/* ── Financial Analysis ───────────────────────────────────────────── */}
+       $args[0].Value -replace '─+', '-' -replace '─', '-' 
       <Page size="A4" style={styles.page}>
         <View style={styles.sectionPage}>
           <PageHeader title="Financial Analysis" />
@@ -380,7 +380,7 @@ export function ReportDocument({ data, model3dImage }: ReportDocumentProps) {
         <Text style={styles.pageNumber} render={({ pageNumber, totalPages }) => `${pageNumber} / ${totalPages}`} fixed />
       </Page>
 
-      {/* ── Environmental Benefits ───────────────────────────────────────── */}
+       $args[0].Value -replace '─+', '-' -replace '─', '-' 
       <Page size="A4" style={styles.page}>
         <View style={styles.sectionPage}>
           <PageHeader title="Environmental Benefits" />
@@ -399,7 +399,7 @@ export function ReportDocument({ data, model3dImage }: ReportDocumentProps) {
         <Text style={styles.pageNumber} render={({ pageNumber, totalPages }) => `${pageNumber} / ${totalPages}`} fixed />
       </Page>
 
-      {/* ── Quotation ────────────────────────────────────────────────────── */}
+       $args[0].Value -replace '─+', '-' -replace '─', '-' 
       <Page size="A4" style={styles.page}>
         <View style={styles.sectionPage}>
           <PageHeader title="Quotation" />
@@ -441,7 +441,7 @@ export function ReportDocument({ data, model3dImage }: ReportDocumentProps) {
         <Text style={styles.pageNumber} render={({ pageNumber, totalPages }) => `${pageNumber} / ${totalPages}`} fixed />
       </Page>
 
-      {/* ── Assumptions & Disclaimer ─────────────────────────────────────── */}
+       $args[0].Value -replace '─+', '-' -replace '─', '-' 
       <Page size="A4" style={styles.page}>
         <View style={styles.sectionPage}>
           <PageHeader title="Assumptions & Disclaimer" />

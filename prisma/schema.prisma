@@ -7,61 +7,45 @@ datasource db {
 }
 
 model Report {
-  id        String   @id @default(cuid())
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  quoteNumber String @unique
-
-  // Address
-  addressRaw       String
-  addressUprn      String?
-  lat              Float
-  lng              Float
-  postcode         String
-  postcodeDistrict String
-
-  // Building footprint (WGS84 GeoJSON polygon, stored as JSON string)
-  footprintGeojson String? // null if OS NGD returned nothing
-  footprintSource  String // "os_ngd" | "estimated"
-
-  // Bill data
-  annualKwh                Float
+  id                        String   @id @default(cuid())
+  createdAt                 DateTime @default(now())
+  updatedAt                 DateTime @updatedAt
+  quoteNumber               String   @unique
+  addressRaw                String
+  addressUprn               String?
+  lat                       Float
+  lng                       Float
+  postcode                  String
+  postcodeDistrict          String
+  footprintGeojson          String?
+  footprintSource           String
+  annualKwh                 Float
   tariffPencePerKwh         Float
   standingChargePencePerDay Float
   exportTariffPencePerKwh   Float
-  billSource               String // "ocr" | "manual" | "default"
-
-  // System design
-  panelCount       Int
-  systemSizeKw     Float
-  panelSpecJson    String // JSON: PanelSpec
-  inverterSpecJson String // JSON: InverterSpec
-  batterySpecJson  String? // JSON: BatterySpec | null
-
-  // Calculation results
-  mcsZone               String
-  irradianceKwhPerM2    Float
-  annualGenerationKwh   Float
-  selfConsumptionKwh    Float
-  exportKwh             Float
-  annualSavingsPounds   Float
-  paybackYears          Float
-  co2SavedTonnesPerYear Float
-  monthlyGenJson        String // JSON: number[12]
-  twentyFiveYearJson    String // JSON: { year: number; saving: number; cumulative: number }[]
-
-  // Assumptions used to produce this report
-  assumptionsJson String // JSON: SolarAssumptions
-
-  // Panel layout positions (JSON: PanelPosition[])
-  panelLayoutJson String @default("[]")
-
-  // 3D capture image (base64 data URL or Supabase Storage URL)
-  model3dImageUrl String?
-
-  // Generated PDF
-  pdfUrl String?
-
-  status String @default("draft") // "draft" | "complete"
+  billSource                String
+  panelCount                Int
+  systemSizeKw              Float
+  panelSpecJson             String
+  inverterSpecJson          String
+  batterySpecJson           String?
+  mcsZone                   String
+  irradianceKwhPerM2        Float
+  annualGenerationKwh       Float
+  selfConsumptionKwh        Float
+  exportKwh                 Float
+  annualSavingsPounds       Float
+  paybackYears              Float
+  co2SavedTonnesPerYear     Float
+  monthlyGenJson            String
+  twentyFiveYearJson        String
+  assumptionsJson           String
+  panelLayoutJson           String   @default("[]")
+  model3dImageUrl           String?
+  pdfUrl                    String?
+  status                    String   @default("draft")
+  solarApiJson              String?
+  solarCoveragePercent      Float?
+  imageryQuality            String?
+  mcsGenerationKwh          Float?
 }

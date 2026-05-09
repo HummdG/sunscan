@@ -1,21 +1,32 @@
 import type { Metadata } from 'next'
-import { Geist, Geist_Mono } from 'next/font/google'
+import { Syne, Outfit, Space_Mono } from 'next/font/google'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import './globals.css'
 
-const geistSans = Geist({
-  variable: '--font-geist-sans',
+const syne = Syne({
+  variable: '--font-syne',
   subsets: ['latin'],
+  weight: ['400', '500', '600', '700', '800'],
+  display: 'swap',
 })
 
-const geistMono = Geist_Mono({
-  variable: '--font-geist-mono',
+const outfit = Outfit({
+  variable: '--font-outfit',
   subsets: ['latin'],
+  weight: ['300', '400', '500', '600'],
+  display: 'swap',
+})
+
+const spaceMono = Space_Mono({
+  variable: '--font-space-mono',
+  subsets: ['latin'],
+  weight: ['400', '700'],
+  display: 'swap',
 })
 
 export const metadata: Metadata = {
-  title: 'SunScan — Solar Survey & Proposal',
-  description: 'Get a free solar survey and professional proposal using OS building data and MCS calculations.',
+  title: 'SunScan — AI Solar Survey Platform',
+  description: 'AI-powered solar survey platform for UK solar installers. Full installation specification in under 60 seconds.',
 }
 
 export default function RootLayout({
@@ -24,8 +35,11 @@ export default function RootLayout({
   children: React.ReactNode
 }>) {
   return (
-    <html lang="en" className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}>
-      <body className="min-h-full flex flex-col bg-background text-foreground">
+    <html
+      lang="en"
+      className={`${syne.variable} ${outfit.variable} ${spaceMono.variable} h-full antialiased`}
+    >
+      <body className="min-h-full flex flex-col bg-background text-foreground" style={{ fontFamily: 'var(--font-outfit, ui-sans-serif), sans-serif' }}>
         <TooltipProvider>{children}</TooltipProvider>
       </body>
     </html>

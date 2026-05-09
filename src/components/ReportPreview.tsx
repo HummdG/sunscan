@@ -1,4 +1,4 @@
-'use client'
+﻿'use client'
 
 import { Download, Sun, Zap, Leaf, TrendingUp, Home, Battery } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -8,6 +8,7 @@ import { Separator } from '@/components/ui/separator'
 import { EstimatedBadge } from './EstimatedBadge'
 import { RoofIsometricViewer } from './RoofIsometricViewer'
 import { wgs84ToLocalMetres, polygonCentroid } from '@/lib/geometry'
+import { selectOptimalPanelConfig } from '@/lib/googleSolarApi'
 import {
   MonthlyGenChart,
   SelfConsumptionDonut,
@@ -49,25 +50,32 @@ export function ReportPreview({ data }: ReportPreviewProps) {
   const isEstimatedBill = data.billSource === 'default'
   const isEstimatedFootprint = data.footprintSource === 'estimated'
 
-  // Parse footprint for the live schematic viewer
+  // Parse footprint — use Google Solar building centre when available so segment
+  // centers (also computed from that origin) align with the footprint polygon.
+  const solarInsights = data.solarApiData ?? undefined
   let polygonLocalM: [number, number][] | null = null
   if (data.footprintGeojson) {
     try {
       const geojson = JSON.parse(data.footprintGeojson) as { type: string; coordinates: number[][][] }
       const ring = geojson.coordinates[0] as [number, number][]
-      const centre = polygonCentroid(ring)
+      const centre = solarInsights
+        ? [solarInsights.center.longitude, solarInsights.center.latitude] as [number, number]
+        : polygonCentroid(ring)
       polygonLocalM = wgs84ToLocalMetres(ring, centre)
     } catch {
       // geojson parse error — fall through to null
     }
   }
+
+  const solarConfigs = solarInsights?.solarPotential.solarPanelConfigs ?? []
+  const selectedPanelConfig = selectOptimalPanelConfig(solarConfigs, data.annualKwh, 0.04, 0.14) ?? undefined
   const annualBillBefore = (data.annualKwh * data.tariffPencePerKwh) / 100 + (data.standingChargePencePerDay * 365) / 100
   const annualBillAfter = annualBillBefore - data.results.annualSavingsPounds
 
   return (
     <div className="max-w-4xl mx-auto px-4 py-8 space-y-10">
 
-      {/* ── Cover header ─────────────────────────────────────────────────── */}
+       $args[0].Value -replace '─+', '-' -replace '─', '-' 
       <div className="rounded-2xl bg-[#1E3A5F] text-white p-8">
         <div className="flex items-start justify-between flex-wrap gap-4">
           <div>
@@ -97,7 +105,7 @@ export function ReportPreview({ data }: ReportPreviewProps) {
         )}
       </div>
 
-      {/* ── Key stats ────────────────────────────────────────────────────── */}
+       $args[0].Value -replace '─+', '-' -replace '─', '-' 
       <div>
         <h2 className="text-lg font-semibold mb-4">Recommended System</h2>
         <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
@@ -110,7 +118,7 @@ export function ReportPreview({ data }: ReportPreviewProps) {
         </div>
       </div>
 
-      {/* ── Roof schematic ───────────────────────────────────────────────── */}
+       $args[0].Value -replace '─+', '-' -replace '─', '-' 
       <div>
         <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
           Roof Schematic
@@ -122,13 +130,15 @@ export function ReportPreview({ data }: ReportPreviewProps) {
             wallHeightM={5.5}
             roofPitchDeg={data.assumptions.roofPitchDeg}
             source={data.footprintSource}
+            solarInsights={solarInsights}
+            selectedPanelConfig={selectedPanelConfig}
           />
         ) : (
           <p className="text-sm text-muted-foreground">No building footprint data available.</p>
         )}
       </div>
 
-      {/* ── System components ────────────────────────────────────────────── */}
+       $args[0].Value -replace '─+', '-' -replace '─', '-' 
       <div>
         <h2 className="text-lg font-semibold mb-4">System Components</h2>
         <div className="grid md:grid-cols-2 gap-4">
@@ -176,7 +186,7 @@ export function ReportPreview({ data }: ReportPreviewProps) {
         </div>
       </div>
 
-      {/* ── Monthly generation ───────────────────────────────────────────── */}
+       $args[0].Value -replace '─+', '-' -replace '─', '-' 
       <div>
         <h2 className="text-lg font-semibold mb-4">Monthly Generation</h2>
         <Card>
@@ -194,7 +204,7 @@ export function ReportPreview({ data }: ReportPreviewProps) {
         </Card>
       </div>
 
-      {/* ── Self-consumption ─────────────────────────────────────────────── */}
+       $args[0].Value -replace '─+', '-' -replace '─', '-' 
       <div className="grid md:grid-cols-2 gap-6">
         <div>
           <h2 className="text-lg font-semibold mb-4">Energy Usage Breakdown</h2>
@@ -233,7 +243,7 @@ export function ReportPreview({ data }: ReportPreviewProps) {
         </div>
       </div>
 
-      {/* ── 25-year savings ──────────────────────────────────────────────── */}
+       $args[0].Value -replace '─+', '-' -replace '─', '-' 
       <div>
         <h2 className="text-lg font-semibold mb-4">25-Year Investment Returns</h2>
         <Card>
@@ -262,7 +272,7 @@ export function ReportPreview({ data }: ReportPreviewProps) {
         </Card>
       </div>
 
-      {/* ── Environmental ────────────────────────────────────────────────── */}
+       $args[0].Value -replace '─+', '-' -replace '─', '-' 
       <div>
         <h2 className="text-lg font-semibold mb-4">Environmental Impact</h2>
         <div className="grid grid-cols-3 gap-4">
@@ -272,7 +282,7 @@ export function ReportPreview({ data }: ReportPreviewProps) {
         </div>
       </div>
 
-      {/* ── Assumptions ──────────────────────────────────────────────────── */}
+       $args[0].Value -replace '─+', '-' -replace '─', '-' 
       <div>
         <h2 className="text-lg font-semibold mb-4">Assumptions</h2>
         <Card>
@@ -300,7 +310,7 @@ export function ReportPreview({ data }: ReportPreviewProps) {
         </Card>
       </div>
 
-      {/* ── Disclaimer ───────────────────────────────────────────────────── */}
+       $args[0].Value -replace '─+', '-' -replace '─', '-' 
       <div className="text-xs text-muted-foreground bg-muted/30 rounded-lg p-4 leading-relaxed">
         <strong>Disclaimer:</strong> This report is based on estimated data and is intended as a guide only. Actual solar generation,
         savings, and payback may vary depending on precise roof orientation, shading, system degradation, occupant behaviour, and future energy prices.

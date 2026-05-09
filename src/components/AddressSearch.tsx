@@ -3,10 +3,10 @@
 import { useState, useCallback, useRef } from 'react'
 import { Command, CommandInput, CommandList, CommandItem, CommandEmpty } from '@/components/ui/command'
 import { Skeleton } from '@/components/ui/skeleton'
-import type { OsAddress, OsBuilding } from '@/lib/types'
+import type { OsAddress } from '@/lib/types'
 
 interface AddressSearchProps {
-  onAddressSelected: (address: OsAddress, building: OsBuilding) => void
+  onAddressSelected: (address: OsAddress) => void
   defaultValue?: string
 }
 
@@ -14,7 +14,6 @@ export function AddressSearch({ onAddressSelected, defaultValue = '' }: AddressS
   const [query, setQuery] = useState(defaultValue)
   const [results, setResults] = useState<OsAddress[]>([])
   const [loading, setLoading] = useState(false)
-  const [loadingBuilding, setLoadingBuilding] = useState(false)
   const [open, setOpen] = useState(false)
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -42,35 +41,11 @@ export function AddressSearch({ onAddressSelected, defaultValue = '' }: AddressS
   }, [])
 
   const selectAddress = useCallback(
-    async (address: OsAddress) => {
+    (address: OsAddress) => {
       setQuery(address.address)
       setOpen(false)
       setResults([])
-      setLoadingBuilding(true)
-      try {
-        const res = await fetch(
-          `/api/os/building?uprn=${encodeURIComponent(address.uprn)}&lat=${address.lat}&lng=${address.lng}`,
-        )
-        const data = await res.json()
-        onAddressSelected(address, data.building)
-      } catch (err) {
-        console.error('Building fetch failed:', err)
-        // Provide estimated fallback building
-        const fallbackBuilding: OsBuilding = {
-          footprintPolygon: [
-            [address.lng - 0.00006, address.lat - 0.00004],
-            [address.lng + 0.00006, address.lat - 0.00004],
-            [address.lng + 0.00006, address.lat + 0.00004],
-            [address.lng - 0.00006, address.lat + 0.00004],
-            [address.lng - 0.00006, address.lat - 0.00004],
-          ],
-          source: 'estimated',
-          areaM2: 80,
-        }
-        onAddressSelected(address, fallbackBuilding)
-      } finally {
-        setLoadingBuilding(false)
-      }
+      onAddressSelected(address)
     },
     [onAddressSelected],
   )
@@ -113,11 +88,6 @@ export function AddressSearch({ onAddressSelected, defaultValue = '' }: AddressS
           </CommandList>
         )}
       </Command>
-      {loadingBuilding && (
-        <div className="mt-2 text-sm text-muted-foreground animate-pulse">
-          Fetching building data...
-        </div>
-      )}
     </div>
   )
 }

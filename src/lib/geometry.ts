@@ -15,6 +15,15 @@ export function bng27700ToWgs84(easting: number, northing: number): [number, num
 }
 
 /**
+ * Convert WGS84 [lng, lat] to EPSG:27700 BNG [easting, northing].
+ * Inverse of bng27700ToWgs84 — used for EA LiDAR WCS requests.
+ */
+export function wgs84ToBng27700(lng: number, lat: number): [number, number] {
+  const [easting, northing] = proj4(WGS84, BNG, [lng, lat])
+  return [easting, northing]
+}
+
+/**
  * Convert a WGS84 polygon to local metre offsets relative to the centroid.
  * Uses flat-earth approximation — valid at building scale (<500m).
  * Returns [x, z] pairs where x=east, z=south (Three.js convention: +x right, +z toward viewer).
@@ -173,7 +182,7 @@ export function estimateRoofPlanes(
  * Convert compass bearing (0=North) to MCS orientation (0=South).
  */
 export function compassToMcsOrientation(compassDeg: number): number {
-  return Math.abs(((compassDeg + 180) % 360) - 180)
+  return Math.abs(compassDeg - 180)
 }
 
 /**

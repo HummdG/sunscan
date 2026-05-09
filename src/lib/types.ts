@@ -30,6 +30,18 @@ export interface OsBuilding {
   roofAzimuthDeg?: number
   /** Roof pitch angle (degrees) derived from OS eave/ridge heights */
   roofPitchDeg?: number
+  /** All building sections from OS NGD, sorted largest first.
+   *  Only present when source === 'os_ngd' and multiple parts exist. */
+  parts?: BuildingPart[]
+}
+
+export interface BuildingPart {
+  /** WGS84 polygon ring for this building section */
+  footprintPolygon: [number, number][]
+  areaM2: number
+  eaveHeightM?: number
+  ridgeHeightM?: number
+  roofPitchDeg?: number
 }
 
 // ─── Bill parsing ─────────────────────────────────────────────────────────────
@@ -134,7 +146,7 @@ export interface ReportData {
 
   // Building
   footprintGeojson: string | null
-  footprintSource: 'os_ngd' | 'estimated'
+  footprintSource: 'os_ngd' | 'estimated' | 'google_solar'
 
   // Bill
   annualKwh: number
@@ -158,9 +170,104 @@ export interface ReportData {
   // Assumptions
   assumptions: SolarAssumptions
 
+  // Google Solar
+  solarApiData?: GoogleSolarBuildingInsights | null
+  solarCoveragePercent?: number | null
+  imageryQuality?: 'HIGH' | 'MEDIUM' | 'LOW' | null
+  mcsGenerationKwh?: number | null
+
   // Images
   model3dImageUrl: string | null
   pdfUrl: string | null
+}
+
+// ─── Google Solar API ────────────────────────────────────────────────────────
+
+export interface LatLng {
+  latitude: number
+  longitude: number
+}
+
+export interface GoogleSolarDate {
+  year: number
+  month: number
+  day: number
+}
+
+export interface GoogleSolarStats {
+  areaMeters2: number
+  sunshineQuantiles: number[]
+  groundAreaMeters2: number
+}
+
+export interface GoogleSolarRoofSegment {
+  pitchDegrees: number
+  /** True compass bearing: 0=N, 90=E, 180=S, 270=W */
+  azimuthDegrees: number
+  stats: GoogleSolarStats
+  center: LatLng
+  boundingBox: { sw: LatLng; ne: LatLng }
+  planeHeightAtCenterMeters: number
+}
+
+export interface GoogleSolarRoofSegmentSummary {
+  pitchDegrees: number
+  azimuthDegrees: number
+  panelsCount: number
+  yearlyEnergyDcKwh: number
+  segmentIndex: number
+}
+
+export interface GoogleSolarPanelConfig {
+  panelsCount: number
+  yearlyEnergyDcKwh: number
+  roofSegmentSummaries: GoogleSolarRoofSegmentSummary[]
+}
+
+export interface GoogleSolarPanel {
+  segmentIndex: number
+  center: LatLng
+  orientation: 'LANDSCAPE' | 'PORTRAIT'
+  yearlyEnergyDcKwh: number
+}
+
+export interface GoogleSolarBuildingInsights {
+  name: string
+  center: LatLng
+  boundingBox: { sw: LatLng; ne: LatLng }
+  imageryDate: GoogleSolarDate
+  imageryQuality: 'HIGH' | 'MEDIUM' | 'LOW'
+  solarPotential: {
+    maxArrayPanelsCount: number
+    maxArrayAreaMeters2: number
+    maxSunshineHoursPerYear: number
+    carbonOffsetFactorKgPerMwh: number
+    wholeRoofStats: GoogleSolarStats
+    roofSegmentStats: GoogleSolarRoofSegment[]
+    solarPanels?: GoogleSolarPanel[]
+    solarPanelConfigs: GoogleSolarPanelConfig[]
+    panelCapacityWatts: number
+    panelHeightMeters: number
+    panelWidthMeters: number
+    panelLifetimeYears: number
+    buildingStats?: GoogleSolarStats
+  }
+}
+
+export interface GoogleSolarDataLayers {
+  imageryDate: GoogleSolarDate
+  imageryProcessedDate: GoogleSolarDate
+  pixelSizeMeters: number
+  rgbUrl: string
+  dsmUrl: string
+  maskUrl: string
+  annualFluxUrl: string
+  monthlyFluxUrl?: string
+  hourlyShadeUrls?: string[]
+  /** Extracted GCS id from rgbUrl for use with /api/solar/geotiff */
+  rgbId?: string
+  /** Extracted GCS id from dsmUrl for use with /api/solar/geotiff */
+  dsmId?: string
 }
 
 // ─── API route payloads ───────────────────────────────────────────────────────
@@ -172,13 +279,14 @@ export interface GenerateReportPayload {
   lng: number
   postcode: string
   footprintGeojson: string | null
-  footprintSource: 'os_ngd' | 'estimated'
+  footprintSource: 'os_ngd' | 'estimated' | 'google_solar'
   annualKwh: number
   tariffPencePerKwh: number
   standingChargePencePerDay: number
   exportTariffPencePerKwh: number
   billSource: 'ocr' | 'manual' | 'default'
   assumptions: SolarAssumptions
+  solarApiJson?: string
   model3dImageBase64?: string
   chartImagesBase64?: string[]
 }

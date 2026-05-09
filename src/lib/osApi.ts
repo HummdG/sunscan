@@ -1,4 +1,4 @@
-import type { OsAddress, OsBuilding, RoofAspect } from './types'
+import type { OsAddress, OsBuilding, RoofAspect, BuildingPart } from './types'
 import { polygonArea, polygonCentroid, polygonPrincipalAxisLength, wgs84ToLocalMetres } from './geometry'
 
 const OS_API_KEY = process.env.OS_API_KEY
@@ -53,13 +53,16 @@ export async function searchAddresses(query: string): Promise<OsAddress[]> {
 export async function fetchBuilding(uprn: string, lat?: number, lng?: number): Promise<OsBuilding> {
   if (!OS_API_KEY) return mockFetchBuilding(lat, lng)
 
-  // Try UPRN filter first
+  // Try UPRN filter first — results are all parts of this specific building
   let features = await queryNgdBuilding({ uprn, apiKey: OS_API_KEY })
+  let isUprnResult = features.length > 0
 
   // Fallback to bbox around address coordinates if UPRN returned nothing
+  // bbox results can include neighboring buildings, so multi-part is disabled for these
   if (features.length === 0 && lat !== undefined && lng !== undefined) {
     console.warn(`OS NGD: 0 features for UPRN ${uprn} — trying bbox fallback`)
     features = await queryNgdBuilding({ lat, lng, apiKey: OS_API_KEY })
+    isUprnResult = false  // bbox may contain multiple unrelated buildings
   }
 
   if (features.length === 0) {
@@ -67,7 +70,7 @@ export async function fetchBuilding(uprn: string, lat?: number, lng?: number): P
     return mockFetchBuilding(lat, lng)
   }
 
-  return featuresToBuilding(features)
+  return featuresToBuilding(features, isUprnResult)
 }
 
 async function queryNgdBuilding(
@@ -177,44 +180,76 @@ function extractRings(geom: { type: string; coordinates: GeoJsonCoords }): numbe
   return null
 }
 
-function featuresToBuilding(features: Record<string, unknown>[]): OsBuilding {
-  // Pick the feature with the largest polygon
-  let bestFeature = features[0]
-  let bestArea = 0
-  for (const f of features) {
+function featuresToBuilding(features: Record<string, unknown>[], allowMultiPart: boolean = false): OsBuilding {
+  // Parse every valid feature into a BuildingPart, tracking original index
+  interface PartEntry { part: BuildingPart; featureIndex: number }
+  const entries: PartEntry[] = []
+
+  for (let fi = 0; fi < features.length; fi++) {
+    const f = features[fi]
     const geom = f.geometry as { type: string; coordinates: GeoJsonCoords } | null
     if (!geom) continue
     const ring = extractRings(geom)
     if (!ring) continue
-    // Coordinates are WGS84 [lng, lat] — compute area in local metres
-    const wgs84 = ring as [number, number][]
+
+    const wgs84: [number, number][] = ring as [number, number][]
     const c = polygonCentroid(wgs84)
-    const area = polygonArea(wgs84ToLocalMetres(wgs84, c))
-    if (area > bestArea) { bestArea = area; bestFeature = f }
+    const local = wgs84ToLocalMetres(wgs84, c)
+    const areaM2 = polygonArea(local)
+    if (areaM2 < 2) continue  // skip degenerate slivers
+
+    const props = (f.properties ?? {}) as Record<string, unknown>
+    const eaveHeightM = Number(props['relativeheightroofonset'] ?? props['relativeheightroofbase'] ?? 0) || undefined
+    const ridgeHeightM = Number(props['relativeheightmaximum'] ?? 0) || undefined
+    const roofPitchDeg =
+      eaveHeightM !== undefined && ridgeHeightM !== undefined
+        ? derivePitchDeg(eaveHeightM, ridgeHeightM, local, areaM2)
+        : undefined
+
+    entries.push({
+      part: { footprintPolygon: wgs84, areaM2, eaveHeightM, ridgeHeightM, roofPitchDeg },
+      featureIndex: fi,
+    })
   }
 
-  const geom = bestFeature.geometry as { type: string; coordinates: GeoJsonCoords }
-  const ring = extractRings(geom)!
+  if (entries.length === 0) return mockFetchBuilding()
 
-  // OS NGD returns GeoJSON in WGS84 (CRS84) by default — coordinates are [lng, lat]
-  const wgs84Ring: [number, number][] = ring as [number, number][]
+  // Sort largest first — index 0 is always the primary (main block)
+  entries.sort((a, b) => b.part.areaM2 - a.part.areaM2)
+  const primaryFeature = features[entries[0].featureIndex]
+  const primaryPart = entries[0].part
 
-  // Compute area in real metres via flat-earth local projection
+  // Derive main OsBuilding fields from the primary feature (backward-compatible)
+  const wgs84Ring = primaryPart.footprintPolygon
   const centre = polygonCentroid(wgs84Ring)
   const localRing = wgs84ToLocalMetres(wgs84Ring, centre)
   const areaM2 = polygonArea(localRing)
 
-  const props = (bestFeature.properties ?? {}) as Record<string, unknown>
-
+  const props = (primaryFeature.properties ?? {}) as Record<string, unknown>
   const eaveHeightM = Number(props['relativeheightroofonset'] ?? props['relativeheightroofbase'] ?? 0) || undefined
   const ridgeHeightM = Number(props['relativeheightmaximum'] ?? 0) || undefined
   const roofAspect = extractRoofAspect(props)
-
   const roofAzimuthDeg = roofAspect ? bestSolarAzimuth(roofAspect) : undefined
   const roofPitchDeg =
     eaveHeightM !== undefined && ridgeHeightM !== undefined
       ? derivePitchDeg(eaveHeightM, ridgeHeightM, localRing, areaM2)
       : undefined
+
+  // Only attach multi-part data when the features came from a UPRN query (all parts of the
+  // same building) and also filter by proximity — detached outbuildings > 20m away are excluded
+  let parts: BuildingPart[] | undefined
+  if (allowMultiPart && entries.length > 1) {
+    const maxDistM = Math.max(20, Math.sqrt(areaM2) * 2)
+    const nearby = entries.filter((e, i) => {
+      if (i === 0) return true  // always keep primary
+      const partCentroid = polygonCentroid(e.part.footprintPolygon)
+      const [[dx, dz]] = wgs84ToLocalMetres([partCentroid], centre)
+      return Math.sqrt(dx * dx + dz * dz) <= maxDistM
+    })
+    if (nearby.length > 1) parts = nearby.map(e => e.part)
+  }
+
+  console.log(`[featuresToBuilding] ${features.length} raw features → ${entries.length} valid parts, multiPart=${allowMultiPart}, kept=${parts?.length ?? 1}, primary area: ${areaM2.toFixed(1)}m²`)
 
   return {
     footprintPolygon: wgs84Ring,
@@ -225,6 +260,7 @@ function featuresToBuilding(features: Record<string, unknown>[]): OsBuilding {
     roofAspect,
     roofAzimuthDeg,
     roofPitchDeg,
+    parts,
   }
 }
 

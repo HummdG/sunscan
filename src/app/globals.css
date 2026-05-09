@@ -128,3 +128,64 @@
     @apply font-sans;
   }
 }
+
+/* ===== SunScan Design System ===================================== */
+:root {
+  --ss-ink:      #030B17;
+  --ss-s1:       #071325;
+  --ss-s2:       #0C1E38;
+  --ss-s3:       #152848;
+  --ss-s4:       #1C3357;
+  --ss-blue:     #0EA5E9;
+  --ss-blue-l:   #38BDF8;
+  --ss-violet:   #7C3AED;
+  --ss-violet-l: #A78BFA;
+  --ss-amber:    #F59E0B;
+  --ss-amber-l:  #FCD34D;
+  --ss-green:    #10B981;
+  --ss-t1:       #F1F5F9;
+  --ss-t2:       #CBD5E1;
+  --ss-t3:       #94A3B8;
+  --ss-t4:       #64748B;
+  --ss-border:   rgba(14,165,233,0.1);
+  --ss-border-h: rgba(14,165,233,0.22);
+  --ss-glow:     0 0 24px rgba(14,165,233,0.25), 0 0 48px rgba(14,165,233,0.08);
+}
+
+.ss-heading { font-family: var(--font-syne, ui-sans-serif), sans-serif; }
+.ss-mono    { font-family: var(--font-space-mono, ui-monospace), monospace; }
+
+@keyframes ss-float {
+  0%, 100% { transform: translateY(0); }
+  50%       { transform: translateY(-7px); }
+}
+
+@keyframes ss-pulse-dot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%       { opacity: 0.4; transform: scale(0.72); }
+}
+
+@keyframes ss-sun-orbit {
+  from { transform: rotate(-90deg); }
+  to   { transform: rotate(90deg); }
+}
+
+@keyframes ss-bar-grow {
+  from { transform: scaleY(0); }
+  to   { transform: scaleY(1); }
+}
+
+/* scrollbar */
+.ss-scroll::-webkit-scrollbar       { width: 5px; }
+.ss-scroll::-webkit-scrollbar-track { background: var(--ss-s1); }
+.ss-scroll::-webkit-scrollbar-thumb { background: var(--ss-s4); border-radius: 3px; }
+
+/* Feature card hover — CSS only so RSC is preserved */
+.ss-feature-card {
+  background: var(--ss-s1);
+  transition: background-color 0.28s ease;
+}
+.ss-feature-card:hover { background: var(--ss-s2); }
+
+/* Anchor scroll offset for fixed nav */
+section[id] { scroll-margin-top: 76px; }

@@ -4,16 +4,20 @@ import { useState, useRef, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { Button } from '@/components/ui/button'
 import { Progress } from '@/components/ui/progress'
+import { Badge } from '@/components/ui/badge'
 import { AddressSearch } from './AddressSearch'
 import { BillUpload } from './BillUpload'
 import { AssumptionsPanel } from './AssumptionsPanel'
-import { EstimatedBadge } from './EstimatedBadge'
-import { RoofIsometricViewer } from './RoofIsometricViewer'
-import { Sun, MapPin, FileText, Loader2, CheckCircle2, ChevronRight, ChevronLeft } from 'lucide-react'
-import type { OsAddress, OsBuilding, SolarAssumptions, PanelPosition } from '@/lib/types'
-import { DEFAULT_ASSUMPTIONS, DEFAULT_PANEL } from '@/lib/solarCalculations'
-import { wgs84ToLocalMetres, polygonCentroid, estimateRoofPlanes, getBestRoofPlane } from '@/lib/geometry'
-import { calculatePanelLayout } from '@/lib/panelLayout'
+import { SolarRoofViewer } from './SolarRoofViewer'
+import { Sun, MapPin, FileText, Loader2, CheckCircle2, ChevronRight, ChevronLeft, AlertTriangle } from 'lucide-react'
+import type {
+  OsAddress,
+  OsBuilding,
+  SolarAssumptions,
+  GoogleSolarBuildingInsights,
+  GoogleSolarDataLayers,
+} from '@/lib/types'
+import { DEFAULT_ASSUMPTIONS } from '@/lib/solarCalculations'
 
 interface BillData {
   annualKwh: number
@@ -44,75 +48,89 @@ export function SurveyForm() {
   const [generating, setGenerating] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  // Address & building
+  // Address
   const [selectedAddress, setSelectedAddress] = useState<OsAddress | null>(null)
-  const [buildingData, setBuildingData] = useState<OsBuilding | null>(null)
+
+  // OS building footprint
+  const [osBuilding, setOsBuilding] = useState<OsBuilding | null>(null)
+
+  // Solar API data
+  const [solarInsights, setSolarInsights] = useState<GoogleSolarBuildingInsights | null>(null)
+  const [dataLayers, setDataLayers] = useState<GoogleSolarDataLayers | null>(null)
+  const [loadingSolar, setLoadingSolar] = useState(false)
+  const [solarError, setSolarError] = useState<string | null>(null)
 
   // Bill
   const [billData, setBillData] = useState<BillData>(DEFAULT_BILL)
 
-  // Assumptions
+  // Assumptions (updated from Solar API best segment)
   const [assumptions, setAssumptions] = useState<SolarAssumptions>(DEFAULT_ASSUMPTIONS)
 
-  // 3D state
-  const [panelPositions, setPanelPositions] = useState<PanelPosition[]>([])
-  const [buildingPolygonLocal, setBuildingPolygonLocal] = useState<[number, number][]>([
-    [-5, -4], [5, -4], [5, 4], [-5, 4], [-5, -4],
-  ])
-
-  // Captured images
+  // Captured 3D image for PDF
   const capturedModel3dRef = useRef<string | null>(null)
 
-  // Compute panel layout when building or assumptions change
-  const computePanelLayout = useCallback(
-    (building: OsBuilding, ass: SolarAssumptions) => {
-      const ring = building.footprintPolygon
-      const centre = polygonCentroid(ring)
-      const localPoly = wgs84ToLocalMetres(ring, centre)
-      setBuildingPolygonLocal(localPoly)
+  const handleAddressSelected = useCallback(async (address: OsAddress) => {
+    setSelectedAddress(address)
+    setSolarInsights(null)
+    setDataLayers(null)
+    setSolarError(null)
+    setOsBuilding(null)
+    setLoadingSolar(true)
 
-      const planes = estimateRoofPlanes(localPoly, ass.roofPitchDeg)
-      const bestPlane = getBestRoofPlane(planes)
-      const { positions } = calculatePanelLayout(bestPlane, DEFAULT_PANEL)
-      setPanelPositions(positions)
-    },
-    [],
-  )
+    try {
+      const [insightsRes, layersRes, buildingRes] = await Promise.all([
+        fetch(`/api/solar/building?lat=${address.lat}&lng=${address.lng}`),
+        fetch(`/api/solar/datalayers?lat=${address.lat}&lng=${address.lng}`),
+        fetch(`/api/os/building?uprn=${encodeURIComponent(address.uprn)}&lat=${address.lat}&lng=${address.lng}`),
+      ])
 
-  const handleAddressSelected = useCallback(
-    (address: OsAddress, building: OsBuilding) => {
-      setSelectedAddress(address)
-      setBuildingData(building)
+      let insights: GoogleSolarBuildingInsights | null = null
+      let layers: GoogleSolarDataLayers | null = null
 
-      // Apply OS-derived roof geometry to assumptions so the calculation uses this specific house
-      const overrides: Partial<SolarAssumptions> = {}
-      if (building.roofAzimuthDeg !== undefined) {
-        // True compass bearing → MCS orientation (0=S, 90=E/W, 180=N)
-        overrides.roofOrientationDeg = Math.abs(building.roofAzimuthDeg - 180)
+      if (insightsRes.ok) {
+        const d = await insightsRes.json()
+        insights = d.data ?? null
       }
-      if (building.roofPitchDeg !== undefined) {
-        overrides.roofPitchDeg = Math.min(70, Math.max(5, building.roofPitchDeg))
+      if (layersRes.ok) {
+        const d = await layersRes.json()
+        layers = d.data ?? null
+      }
+      if (buildingRes.ok) {
+        const d = await buildingRes.json()
+        if (d.building) setOsBuilding(d.building)
       }
 
-      const updatedAssumptions = Object.keys(overrides).length > 0
-        ? { ...assumptions, ...overrides }
-        : assumptions
-      if (Object.keys(overrides).length > 0) setAssumptions(updatedAssumptions)
-      computePanelLayout(building, updatedAssumptions)
-    },
-    [assumptions, computePanelLayout],
-  )
+      if (insights) {
+        setSolarInsights(insights)
+        setDataLayers(layers)
 
-  const handleAssumptionsChange = useCallback(
-    (newAssumptions: SolarAssumptions) => {
-      setAssumptions(newAssumptions)
-      if (buildingData) computePanelLayout(buildingData, newAssumptions)
-    },
-    [buildingData, computePanelLayout],
-  )
+        // Apply best-sunshine segment to assumptions
+        const segs = insights.solarPotential.roofSegmentStats ?? []
+        if (segs.length > 0) {
+          const p50 = (q: number[] | undefined) => q?.[Math.floor((q.length ?? 0) / 2)] ?? 0
+          const best = segs.reduce((prev, cur) =>
+            p50(cur.stats.sunshineQuantiles) > p50(prev.stats.sunshineQuantiles) ? cur : prev,
+          )
+          const mcsOri = Math.abs(((best.azimuthDegrees - 180 + 360) % 360) - 180)
+          setAssumptions(prev => ({
+            ...prev,
+            roofPitchDeg: Math.min(70, Math.max(5, best.pitchDegrees)),
+            roofOrientationDeg: mcsOri,
+          }))
+        }
+      } else {
+        setSolarError('Google Solar data is not available for this address. Calculations will use estimated defaults.')
+      }
+    } catch (err) {
+      console.error('Solar API fetch failed', err)
+      setSolarError('Could not load solar data. Calculations will use estimated defaults.')
+    } finally {
+      setLoadingSolar(false)
+    }
+  }, [])
 
   const handleGenerate = async () => {
-    if (!selectedAddress || !buildingData) return
+    if (!selectedAddress) return
     setGenerating(true)
     setError(null)
     setStep(2)
@@ -124,19 +142,17 @@ export function SurveyForm() {
         lat: selectedAddress.lat,
         lng: selectedAddress.lng,
         postcode: selectedAddress.postcode,
-        footprintGeojson: buildingData.footprintPolygon
-          ? JSON.stringify({
-              type: 'Polygon',
-              coordinates: [buildingData.footprintPolygon],
-            })
+        footprintGeojson: osBuilding
+          ? JSON.stringify({ type: 'Polygon', coordinates: [osBuilding.footprintPolygon] })
           : null,
-        footprintSource: buildingData.source,
+        footprintSource: osBuilding ? 'os_ngd' : solarInsights ? 'google_solar' : 'estimated',
         annualKwh: billData.annualKwh,
         tariffPencePerKwh: billData.tariffPencePerKwh,
         standingChargePencePerDay: billData.standingChargePencePerDay,
         exportTariffPencePerKwh: billData.exportTariffPencePerKwh,
         billSource: billData.source,
         assumptions,
+        solarApiJson: solarInsights ? JSON.stringify(solarInsights) : undefined,
         model3dImageBase64: capturedModel3dRef.current ?? undefined,
         chartImagesBase64: [],
       }
@@ -148,10 +164,7 @@ export function SurveyForm() {
       })
 
       const result = await res.json()
-
-      if (!res.ok) {
-        throw new Error(result.error ?? 'Report generation failed')
-      }
+      if (!res.ok) throw new Error(result.error ?? 'Report generation failed')
 
       router.push(`/report/${result.reportId}`)
     } catch (err) {
@@ -160,6 +173,8 @@ export function SurveyForm() {
       setStep(1)
     }
   }
+
+  void generating
 
   return (
     <div className="max-w-2xl mx-auto px-4 py-8 space-y-8">
@@ -179,7 +194,7 @@ export function SurveyForm() {
         <Progress value={((step + 1) / STEPS.length) * 100} className="h-2" />
       </div>
 
-      {/* ── Step 0: Address ──────────────────────────────────────────────── */}
+      {/* Step 0: Address */}
       {step === 0 && (
         <div className="space-y-6">
           <div>
@@ -191,36 +206,55 @@ export function SurveyForm() {
 
           <AddressSearch onAddressSelected={handleAddressSelected} />
 
-          {selectedAddress && buildingData && (
+          {loadingSolar && (
+            <div className="flex items-center gap-2 p-3 rounded-lg bg-blue-50 border border-blue-200 text-sm text-blue-700 animate-pulse">
+              <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
+              <span>Fetching Google Solar analysis for this property…</span>
+            </div>
+          )}
+
+          {solarError && !loadingSolar && (
+            <div className="flex items-center gap-2 p-3 rounded-lg bg-amber-50 border border-amber-200 text-sm text-amber-800">
+              <AlertTriangle className="h-4 w-4 shrink-0" />
+              <span>{solarError}</span>
+            </div>
+          )}
+
+          {selectedAddress && !loadingSolar && (
             <div className="space-y-4">
               <div className="flex items-center gap-2 p-3 rounded-lg bg-green-50 border border-green-200 text-sm text-green-800">
                 <CheckCircle2 className="h-4 w-4 shrink-0" />
-                <span>
-                  <strong>{selectedAddress.address}</strong> — {buildingData.source === 'estimated' ? (
-                    <span className="inline-flex items-center gap-1">
-                      Estimated building footprint
-                      <EstimatedBadge reason="OS building footprint data was not available for this address. A simplified footprint has been generated from the address coordinates." />
-                    </span>
-                  ) : 'OS building data loaded'}
-                </span>
+                <span className="flex-1 font-medium">{selectedAddress.address}</span>
+                {solarInsights ? (
+                  <Badge variant="outline" className="text-green-700 border-green-300 bg-green-50 text-xs shrink-0">
+                    Google Solar loaded
+                  </Badge>
+                ) : (
+                  <Badge variant="outline" className="text-amber-700 border-amber-300 bg-amber-50 text-xs shrink-0">
+                    Estimated defaults
+                  </Badge>
+                )}
               </div>
 
-              <RoofIsometricViewer
-                polygonLocalM={buildingPolygonLocal}
-                wallHeightM={buildingData.eaveHeightM ?? 5.5}
-                ridgeHeightM={buildingData.ridgeHeightM}
-                roofPitchDeg={assumptions.roofPitchDeg}
-                roofAspect={buildingData.roofAspect}
-                source={buildingData.source}
-                onCapture={(dataUrl) => { capturedModel3dRef.current = dataUrl }}
-              />
+              {solarInsights && (
+                <SolarRoofViewer
+                  insights={solarInsights}
+                  dataLayers={dataLayers}
+                  lat={selectedAddress.lat}
+                  lng={selectedAddress.lng}
+                  osBuilding={osBuilding}
+                  onCapture={(dataUrl) => { capturedModel3dRef.current = dataUrl }}
+                />
+              )}
+
+              <AssumptionsPanel value={assumptions} onChange={setAssumptions} />
             </div>
           )}
 
           <div className="flex justify-end">
             <Button
               onClick={() => setStep(1)}
-              disabled={!selectedAddress || !buildingData}
+              disabled={!selectedAddress || loadingSolar}
               className="gap-2"
             >
               Next: Energy Bill <ChevronRight className="h-4 w-4" />
@@ -229,7 +263,7 @@ export function SurveyForm() {
         </div>
       )}
 
-      {/* ── Step 1: Bill & assumptions ───────────────────────────────────── */}
+      {/* Step 1: Bill */}
       {step === 1 && (
         <div className="space-y-6">
           <div>
@@ -240,8 +274,6 @@ export function SurveyForm() {
           </div>
 
           <BillUpload value={billData} onChange={setBillData} />
-
-          <AssumptionsPanel value={assumptions} onChange={handleAssumptionsChange} />
 
           {error && (
             <div className="p-3 rounded-lg bg-red-50 border border-red-200 text-sm text-red-800">
@@ -260,22 +292,31 @@ export function SurveyForm() {
         </div>
       )}
 
-      {/* ── Step 2: Generating ───────────────────────────────────────────── */}
+      {/* Step 2: Generating */}
       {step === 2 && (
         <div className="text-center space-y-6 py-12">
           <div className="h-16 w-16 mx-auto rounded-full bg-amber-100 flex items-center justify-center">
             <Loader2 className="h-8 w-8 text-amber-500 animate-spin" />
           </div>
           <div>
-            <h2 className="text-xl font-bold">Generating your solar report...</h2>
+            <h2 className="text-xl font-bold">Generating your solar report…</h2>
             <p className="text-muted-foreground mt-2 text-sm">
-              Running MCS calculations, designing your system, and creating your PDF proposal.
+              Running solar calculations, designing your system, and creating your PDF proposal.
             </p>
           </div>
           <div className="space-y-2 text-sm text-muted-foreground max-w-xs mx-auto">
-            <div className="flex items-center gap-2"><CheckCircle2 className="h-4 w-4 text-green-500" /> Looking up MCS zone for {selectedAddress?.postcode}</div>
-            <div className="flex items-center gap-2"><CheckCircle2 className="h-4 w-4 text-green-500" /> Calculating solar irradiance</div>
-            <div className="flex items-center gap-2"><Loader2 className="h-4 w-4 animate-spin" /> Generating PDF report...</div>
+            <div className="flex items-center gap-2">
+              <CheckCircle2 className="h-4 w-4 text-green-500" />
+              Google Solar analysis loaded
+            </div>
+            <div className="flex items-center gap-2">
+              <CheckCircle2 className="h-4 w-4 text-green-500" />
+              MCS irradiance zone: {selectedAddress?.postcode}
+            </div>
+            <div className="flex items-center gap-2">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Generating PDF report…
+            </div>
           </div>
         </div>
       )}
