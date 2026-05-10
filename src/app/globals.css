@@ -121,6 +121,10 @@
   * {
     @apply border-border outline-ring/50;
   }
+  html, body {
+    overflow-x: hidden;
+    max-width: 100vw;
+  }
   body {
     @apply bg-background text-foreground;
   }
@@ -129,30 +133,57 @@
   }
 }
 
-/* ===== SunScan Design System ===================================== */
+/* ===== SunScan Design System — Sun-Bleached Cream ================ */
+/*
+ * The token names are kept (`--ss-ink`, `--ss-s1..s4`, `--ss-blue`, etc.) so
+ * existing markup re-skins automatically. Semantically:
+ *   --ss-ink   → page parchment (was deep navy)
+ *   --ss-s1..4 → progressively warmer cream layers (was deeper slate)
+ *   --ss-blue  → terracotta brand accent (was electric blue)
+ *   --ss-violet→ rust counterpart (was violet)
+ *   --ss-t1..4 → warm-brown text scale (was cool slate)
+ */
 :root {
-  --ss-ink:      #030B17;
-  --ss-s1:       #071325;
-  --ss-s2:       #0C1E38;
-  --ss-s3:       #152848;
-  --ss-s4:       #1C3357;
-  --ss-blue:     #0EA5E9;
-  --ss-blue-l:   #38BDF8;
-  --ss-violet:   #7C3AED;
-  --ss-violet-l: #A78BFA;
-  --ss-amber:    #F59E0B;
-  --ss-amber-l:  #FCD34D;
-  --ss-green:    #10B981;
-  --ss-t1:       #F1F5F9;
-  --ss-t2:       #CBD5E1;
-  --ss-t3:       #94A3B8;
-  --ss-t4:       #64748B;
-  --ss-border:   rgba(14,165,233,0.1);
-  --ss-border-h: rgba(14,165,233,0.22);
-  --ss-glow:     0 0 24px rgba(14,165,233,0.25), 0 0 48px rgba(14,165,233,0.08);
+  /* Surfaces — cream parchment to toasted straw */
+  --ss-ink:      #FAF6EC;  /* page background — warm off-white */
+  --ss-s1:       #F4ECD6;  /* card / panel base */
+  --ss-s2:       #EDE0BF;  /* hovered card / inset surface */
+  --ss-s3:       #DECB99;  /* deeper inset / divider field */
+  --ss-s4:       #C9B077;  /* sun-touched accent surface */
+
+  /* Brand & accents — terracotta + amber + rust */
+  --ss-blue:     #B04020;  /* (formerly blue) terracotta — primary brand */
+  --ss-blue-l:   #D87245;  /* lighter terracotta */
+  --ss-violet:   #8B3A1F;  /* (formerly violet) burnt sienna */
+  --ss-violet-l: #C56B3A;  /* lighter sienna */
+  --ss-amber:    #D97706;  /* deep amber — sunset gold */
+  --ss-amber-l:  #F59E0B;  /* bright amber — direct sun */
+  --ss-green:    #5A7842;  /* olive — environment, more organic than emerald */
+
+  /* Text — warm browns descending in contrast */
+  --ss-t1:       #2A1810;  /* primary — almost black with warm undertone */
+  --ss-t2:       #5C3A24;  /* secondary — coffee */
+  --ss-t3:       #8A6440;  /* tertiary — muted wood */
+  --ss-t4:       #B19068;  /* quaternary — sun-faded ochre */
+
+  /* Borders & glows */
+  --ss-border:   rgba(176,64,32,0.12);
+  --ss-border-h: rgba(176,64,32,0.28);
+  --ss-glow:     0 0 24px rgba(217,119,6,0.18), 0 0 48px rgba(176,64,32,0.10);
+
+  /* Hand-drawn paper grain (used as subtle background overlay) */
+  --ss-paper-grain:
+    radial-gradient(ellipse 1.4px 0.6px at 30% 30%, rgba(120,80,40,0.05) 50%, transparent 51%),
+    radial-gradient(ellipse 1px 0.4px at 70% 65%, rgba(120,80,40,0.04) 50%, transparent 51%),
+    radial-gradient(ellipse 0.8px 0.3px at 45% 80%, rgba(120,80,40,0.05) 50%, transparent 51%);
 }
 
-.ss-heading { font-family: var(--font-syne, ui-sans-serif), sans-serif; }
+/* Fraunces variable axes for a softer, optically-tuned display feel */
+.ss-heading {
+  font-family: var(--font-fraunces, ui-serif), serif;
+  font-variation-settings: "SOFT" 60, "opsz" 96;
+  letter-spacing: -0.01em;
+}
 .ss-mono    { font-family: var(--font-space-mono, ui-monospace), monospace; }
 
 @keyframes ss-float {
@@ -175,17 +206,43 @@
   to   { transform: scaleY(1); }
 }
 
-/* scrollbar */
+/* Travels a marker left→right across a relative parent (workflow timeline) */
+@keyframes ss-eta-travel {
+  0%   { left: 0%;   opacity: 0; }
+  8%   { left: 0%;   opacity: 1; }
+  92%  { left: 100%; opacity: 1; }
+  100% { left: 100%; opacity: 0; }
+}
+
+/* Subtle paper-grain overlay — applied via .ss-paper utility */
+.ss-paper {
+  position: relative;
+}
+.ss-paper::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image: var(--ss-paper-grain);
+  background-size: 6px 6px, 9px 9px, 7px 7px;
+  mix-blend-mode: multiply;
+  opacity: 0.55;
+}
+
+/* scrollbar — warm cream */
 .ss-scroll::-webkit-scrollbar       { width: 5px; }
 .ss-scroll::-webkit-scrollbar-track { background: var(--ss-s1); }
 .ss-scroll::-webkit-scrollbar-thumb { background: var(--ss-s4); border-radius: 3px; }
 
-/* Feature card hover — CSS only so RSC is preserved */
+/* Feature card hover — light variant */
 .ss-feature-card {
   background: var(--ss-s1);
-  transition: background-color 0.28s ease;
+  transition: background-color 0.28s ease, transform 0.28s ease;
 }
-.ss-feature-card:hover { background: var(--ss-s2); }
+.ss-feature-card:hover {
+  background: var(--ss-s2);
+  transform: translateY(-2px);
+}
 
 /* Anchor scroll offset for fixed nav */
 section[id] { scroll-margin-top: 76px; }

@@ -15,6 +15,7 @@ import {
   PdfCumulativeSavingsChart,
   PdfBillSavingsChart,
 } from './PdfCharts'
+import { lineItemsToRows, formatGbp } from './quotationTable'
 
 // ─── Styles ───────────────────────────────────────────────────────────────────
 
@@ -412,26 +413,77 @@ export function ReportDocument({ data, model3dImage }: ReportDocumentProps) {
             <Text style={styles.tableHeaderCell}>Unit Price</Text>
             <Text style={styles.tableHeaderCell}>Total</Text>
           </View>
-          {[
-            { item: `${data.panelSpec.modelName} Solar Panel`, qty: data.panelCount, unit: Math.round((data.assumptions.systemCostPounds * 0.5) / data.panelCount) },
-            { item: `${data.inverterSpec.modelName} Inverter`, qty: 1, unit: Math.round(data.assumptions.systemCostPounds * 0.2) },
-            { item: 'Mounting System & Fixings', qty: 1, unit: Math.round(data.assumptions.systemCostPounds * 0.1) },
-            { item: 'Installation Labour', qty: 1, unit: Math.round(data.assumptions.systemCostPounds * 0.15) },
-            { item: 'DNO Application & Commissioning', qty: 1, unit: Math.round(data.assumptions.systemCostPounds * 0.05) },
-          ].map((row, i) => (
-            <View key={i} style={i % 2 === 0 ? styles.tableRow : styles.tableRowAlt}>
-              <Text style={[styles.tableCell, { flex: 3, textAlign: 'left' }]}>{row.item}</Text>
-              <Text style={styles.tableCell}>{row.qty}</Text>
-              <Text style={styles.tableCell}>£{row.unit.toLocaleString()}</Text>
-              <Text style={styles.tableCell}>£{(row.unit * row.qty).toLocaleString()}</Text>
-            </View>
-          ))}
-          <View style={[styles.tableRow, { backgroundColor: NAVY }]}>
-            <Text style={[styles.tableCell, { flex: 3, textAlign: 'left', color: WHITE, fontFamily: 'Helvetica-Bold' }]}>TOTAL (VAT 0% — domestic solar)</Text>
-            <Text style={styles.tableCell} />
-            <Text style={styles.tableCell} />
-            <Text style={[styles.tableCell, { color: GOLD, fontFamily: 'Helvetica-Bold' }]}>£{data.assumptions.systemCostPounds.toLocaleString()}</Text>
-          </View>
+          {data.quote ? (
+            <>
+              {lineItemsToRows(data.quote).map((row, i) => {
+                if (row.kind === 'category-header') {
+                  return (
+                    <View key={i} style={[styles.tableRow, { backgroundColor: LIGHT }]}>
+                      <Text
+                        style={[
+                          styles.tableCell,
+                          { flex: 3, textAlign: 'left', color: NAVY, fontFamily: 'Helvetica-Bold' },
+                        ]}
+                      >
+                        {row.label}
+                      </Text>
+                      <Text style={styles.tableCell} />
+                      <Text style={styles.tableCell} />
+                      <Text style={styles.tableCell} />
+                    </View>
+                  )
+                }
+                return (
+                  <View key={i} style={i % 2 === 0 ? styles.tableRow : styles.tableRowAlt}>
+                    <Text style={[styles.tableCell, { flex: 3, textAlign: 'left' }]}>
+                      {row.label}
+                    </Text>
+                    <Text style={styles.tableCell}>{row.qty}</Text>
+                    <Text style={styles.tableCell}>{row.unit}</Text>
+                    <Text style={styles.tableCell}>{row.total}</Text>
+                  </View>
+                )
+              })}
+              <View style={[styles.tableRow, { backgroundColor: NAVY }]}>
+                <Text
+                  style={[
+                    styles.tableCell,
+                    { flex: 3, textAlign: 'left', color: WHITE, fontFamily: 'Helvetica-Bold' },
+                  ]}
+                >
+                  TOTAL (VAT {data.quote.vatRatePercent}% — domestic solar)
+                </Text>
+                <Text style={styles.tableCell} />
+                <Text style={styles.tableCell} />
+                <Text style={[styles.tableCell, { color: GOLD, fontFamily: 'Helvetica-Bold' }]}>
+                  {formatGbp(data.quote.totalPounds)}
+                </Text>
+              </View>
+            </>
+          ) : (
+            <>
+              {[
+                { item: `${data.panelSpec.modelName} Solar Panel`, qty: data.panelCount, unit: Math.round((data.assumptions.systemCostPounds * 0.5) / data.panelCount) },
+                { item: `${data.inverterSpec.modelName} Inverter`, qty: 1, unit: Math.round(data.assumptions.systemCostPounds * 0.2) },
+                { item: 'Mounting System & Fixings', qty: 1, unit: Math.round(data.assumptions.systemCostPounds * 0.1) },
+                { item: 'Installation Labour', qty: 1, unit: Math.round(data.assumptions.systemCostPounds * 0.15) },
+                { item: 'DNO Application & Commissioning', qty: 1, unit: Math.round(data.assumptions.systemCostPounds * 0.05) },
+              ].map((row, i) => (
+                <View key={i} style={i % 2 === 0 ? styles.tableRow : styles.tableRowAlt}>
+                  <Text style={[styles.tableCell, { flex: 3, textAlign: 'left' }]}>{row.item}</Text>
+                  <Text style={styles.tableCell}>{row.qty}</Text>
+                  <Text style={styles.tableCell}>£{row.unit.toLocaleString()}</Text>
+                  <Text style={styles.tableCell}>£{(row.unit * row.qty).toLocaleString()}</Text>
+                </View>
+              ))}
+              <View style={[styles.tableRow, { backgroundColor: NAVY }]}>
+                <Text style={[styles.tableCell, { flex: 3, textAlign: 'left', color: WHITE, fontFamily: 'Helvetica-Bold' }]}>TOTAL (VAT 0% — domestic solar)</Text>
+                <Text style={styles.tableCell} />
+                <Text style={styles.tableCell} />
+                <Text style={[styles.tableCell, { color: GOLD, fontFamily: 'Helvetica-Bold' }]}>£{data.assumptions.systemCostPounds.toLocaleString()}</Text>
+              </View>
+            </>
+          )}
 
           <Text style={[styles.disclaimer, { marginTop: 16 }]}>
             Zero-rate VAT applies to the supply and installation of solar panels on residential properties (HMRC Notice 708/6).

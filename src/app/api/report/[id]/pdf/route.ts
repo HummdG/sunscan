@@ -1,62 +1,21 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/db'
 import { generateReportPdf } from '@/lib/reportGenerator'
-import type { ReportData, PanelSpec, InverterSpec, BatterySpec, SolarAssumptions } from '@/lib/types'
+import { hydrateReportData } from '@/lib/reportData'
 
 export async function GET(
   _: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params
-  const report = await prisma.report.findUnique({ where: { id } })
+  const report = await prisma.report.findUnique({
+    where: { id },
+    include: { configuration: true },
+  })
   if (!report) return NextResponse.json({ error: 'Not found' }, { status: 404 })
 
-  const panelSpec: PanelSpec = JSON.parse(report.panelSpecJson)
-  const inverterSpec: InverterSpec = JSON.parse(report.inverterSpecJson)
-  const batterySpec: BatterySpec | null = report.batterySpecJson
-    ? JSON.parse(report.batterySpecJson)
-    : null
-  const assumptions: SolarAssumptions = JSON.parse(report.assumptionsJson)
-  const monthlyGenKwh: number[] = JSON.parse(report.monthlyGenJson)
-  const twentyFiveYearSavings = JSON.parse(report.twentyFiveYearJson)
-
-  const data: ReportData = {
-    id: report.id,
-    quoteNumber: report.quoteNumber,
-    createdAt: report.createdAt.toISOString(),
-    addressRaw: report.addressRaw,
-    lat: report.lat,
-    lng: report.lng,
-    postcode: report.postcode,
-    footprintGeojson: report.footprintGeojson,
-    footprintSource: report.footprintSource as 'os_ngd' | 'estimated',
-    annualKwh: report.annualKwh,
-    tariffPencePerKwh: report.tariffPencePerKwh,
-    standingChargePencePerDay: report.standingChargePencePerDay,
-    exportTariffPencePerKwh: report.exportTariffPencePerKwh,
-    billSource: report.billSource as 'ocr' | 'manual' | 'default',
-    panelCount: report.panelCount,
-    systemSizeKw: report.systemSizeKw,
-    panelSpec,
-    inverterSpec,
-    batterySpec,
-    mcsZone: report.mcsZone,
-    irradianceKwhPerM2: report.irradianceKwhPerM2,
-    results: {
-      annualGenerationKwh: report.annualGenerationKwh,
-      selfConsumptionKwh: report.selfConsumptionKwh,
-      exportKwh: report.exportKwh,
-      selfConsumptionRate: report.selfConsumptionKwh / (report.annualGenerationKwh || 1),
-      annualSavingsPounds: report.annualSavingsPounds,
-      paybackYears: report.paybackYears,
-      co2SavedTonnesPerYear: report.co2SavedTonnesPerYear,
-      monthlyGenKwh,
-      twentyFiveYearSavings,
-    },
-    assumptions,
-    model3dImageUrl: report.model3dImageUrl,
-    pdfUrl: null,
-  }
+  const data = hydrateReportData(report)
+  data.pdfUrl = null
 
   try {
     const pdfBuffer = await generateReportPdf(

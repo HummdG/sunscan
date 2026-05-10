@@ -179,6 +179,9 @@ export interface ReportData {
   // Images
   model3dImageUrl: string | null
   pdfUrl: string | null
+
+  // Pricing (optional — present once a SystemConfiguration exists)
+  quote?: import('./pricing/types').QuoteBreakdown | null
 }
 
 // ─── Google Solar API ────────────────────────────────────────────────────────

@@ -9,7 +9,8 @@ import { AddressSearch } from './AddressSearch'
 import { BillUpload } from './BillUpload'
 import { AssumptionsPanel } from './AssumptionsPanel'
 import { SolarRoofViewer } from './SolarRoofViewer'
-import { Sun, MapPin, FileText, Loader2, CheckCircle2, ChevronRight, ChevronLeft, AlertTriangle } from 'lucide-react'
+import { TierSelectStep } from './TierSelectStep'
+import { Sun, MapPin, FileText, Loader2, CheckCircle2, ChevronRight, ChevronLeft, AlertTriangle, ListChecks } from 'lucide-react'
 import type {
   OsAddress,
   OsBuilding,
@@ -17,6 +18,7 @@ import type {
   GoogleSolarBuildingInsights,
   GoogleSolarDataLayers,
 } from '@/lib/types'
+import type { TierPresetSummary, RoofType } from '@/lib/pricing/types'
 import { DEFAULT_ASSUMPTIONS } from '@/lib/solarCalculations'
 
 interface BillData {
@@ -39,6 +41,7 @@ const DEFAULT_BILL: BillData = {
 const STEPS = [
   { label: 'Address', icon: MapPin },
   { label: 'Energy Bill', icon: FileText },
+  { label: 'Choose System', icon: ListChecks },
   { label: 'Your Report', icon: Sun },
 ]
 
@@ -66,8 +69,55 @@ export function SurveyForm() {
   // Assumptions (updated from Solar API best segment)
   const [assumptions, setAssumptions] = useState<SolarAssumptions>(DEFAULT_ASSUMPTIONS)
 
+  // Tier presets (loaded after bill step)
+  const [tierPresets, setTierPresets] = useState<TierPresetSummary[] | null>(null)
+  const [selectedTier, setSelectedTier] = useState<'essential' | 'standard' | 'premium' | null>(null)
+  const [loadingTiers, setLoadingTiers] = useState(false)
+
   // Captured 3D image for PDF
   const capturedModel3dRef = useRef<string | null>(null)
+
+  function deriveRoofMaxPanels(): number {
+    const fromGoogle = solarInsights?.solarPotential.maxArrayPanelsCount
+    if (fromGoogle && fromGoogle > 0) return fromGoogle
+    if (osBuilding?.areaM2) {
+      // Rough estimate: ~2 m² per panel, half of footprint usable
+      return Math.max(6, Math.round(osBuilding.areaM2 / 4))
+    }
+    return 20
+  }
+
+  function deriveRoofType(): RoofType {
+    const pitch = osBuilding?.roofPitchDeg ?? assumptions.roofPitchDeg ?? 35
+    return pitch < 10 ? 'flat' : 'pitched'
+  }
+
+  const handleLoadTiers = useCallback(async () => {
+    setLoadingTiers(true)
+    setError(null)
+    try {
+      const res = await fetch('/api/quote/tiers', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          annualKwh: billData.annualKwh,
+          roofMaxPanels: deriveRoofMaxPanels(),
+          roofType: deriveRoofType(),
+        }),
+      })
+      const result = await res.json()
+      if (!res.ok) throw new Error(result.error ?? 'Could not load system options')
+      setTierPresets(result.presets)
+      // Default-select Standard
+      setSelectedTier('standard')
+      setStep(2)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not load system options')
+    } finally {
+      setLoadingTiers(false)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [billData, osBuilding, solarInsights, assumptions])
 
   const handleAddressSelected = useCallback(async (address: OsAddress) => {
     setSelectedAddress(address)
@@ -131,9 +181,19 @@ export function SurveyForm() {
 
   const handleGenerate = async () => {
     if (!selectedAddress) return
+    if (!selectedTier || !tierPresets) {
+      setError('Please choose a system package first.')
+      return
+    }
+    const presetConfig = tierPresets.find((p) => p.tier === selectedTier)?.config
+    if (!presetConfig) {
+      setError('Selected package not found — please re-select.')
+      return
+    }
+
     setGenerating(true)
     setError(null)
-    setStep(2)
+    setStep(3)
 
     try {
       const payload = {
@@ -155,6 +215,8 @@ export function SurveyForm() {
         solarApiJson: solarInsights ? JSON.stringify(solarInsights) : undefined,
         model3dImageBase64: capturedModel3dRef.current ?? undefined,
         chartImagesBase64: [],
+        selectedTier,
+        selectedConfig: presetConfig,
       }
 
       const res = await fetch('/api/report/generate', {
@@ -170,7 +232,7 @@ export function SurveyForm() {
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Something went wrong')
       setGenerating(false)
-      setStep(1)
+      setStep(2)
     }
   }
 
@@ -285,15 +347,59 @@ export function SurveyForm() {
             <Button variant="outline" onClick={() => setStep(0)} className="gap-2">
               <ChevronLeft className="h-4 w-4" /> Back
             </Button>
-            <Button onClick={handleGenerate} className="gap-2 bg-[#1E3A5F] hover:bg-[#1E3A5F]/90">
+            <Button
+              onClick={handleLoadTiers}
+              disabled={loadingTiers}
+              className="gap-2 bg-[#B04020] hover:bg-[#8B3219]"
+            >
+              {loadingTiers ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" /> Loading options…
+                </>
+              ) : (
+                <>
+                  Next: Choose System <ChevronRight className="h-4 w-4" />
+                </>
+              )}
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {/* Step 2: Tier select */}
+      {step === 2 && (
+        <div className="space-y-6">
+          <TierSelectStep
+            presets={tierPresets ?? []}
+            selectedTier={selectedTier}
+            onSelect={setSelectedTier}
+            roofMaxPanels={deriveRoofMaxPanels()}
+            loading={loadingTiers}
+          />
+
+          {error && (
+            <div className="p-3 rounded-lg bg-red-50 border border-red-200 text-sm text-red-800">
+              {error}
+            </div>
+          )}
+
+          <div className="flex justify-between">
+            <Button variant="outline" onClick={() => setStep(1)} className="gap-2">
+              <ChevronLeft className="h-4 w-4" /> Back
+            </Button>
+            <Button
+              onClick={handleGenerate}
+              disabled={!selectedTier}
+              className="gap-2 bg-[#B04020] hover:bg-[#8B3219]"
+            >
               <Sun className="h-4 w-4" /> Generate My Report
             </Button>
           </div>
         </div>
       )}
 
-      {/* Step 2: Generating */}
-      {step === 2 && (
+      {/* Step 3: Generating */}
+      {step === 3 && (
         <div className="text-center space-y-6 py-12">
           <div className="h-16 w-16 mx-auto rounded-full bg-amber-100 flex items-center justify-center">
             <Loader2 className="h-8 w-8 text-amber-500 animate-spin" />

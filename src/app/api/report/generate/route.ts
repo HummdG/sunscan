@@ -14,6 +14,8 @@ import { estimateRoofPlanes, getBestRoofPlane, wgs84ToLocalMetres, polygonCentro
 import { calculatePanelLayout } from '@/lib/panelLayout'
 import { generateReportPdf, generateQuoteNumber } from '@/lib/reportGenerator'
 import { selectOptimalPanelConfig } from '@/lib/googleSolarApi'
+import { loadCatalogue, CATALOGUE_VERSION } from '@/lib/pricing/catalogueLoader'
+import { computeQuote } from '@/lib/pricing/computeQuote'
 import type {
   InverterSpec,
   PanelSpec,
@@ -22,6 +24,7 @@ import type {
   SolarAssumptions,
   GoogleSolarBuildingInsights,
 } from '@/lib/types'
+import type { PricingContext, RoofType, SystemConfig, QuoteBreakdown } from '@/lib/pricing/types'
 import { createClient } from '@supabase/supabase-js'
 
 // ─── Supabase Storage client (server-side only) ──────────────────────────────
@@ -63,6 +66,8 @@ const BodySchema = z.object({
   assumptions: AssumptionsSchema,
   solarApiJson: z.string().optional(),
   model3dImageBase64: z.string().optional(),
+  selectedTier: z.enum(['essential', 'standard', 'premium']).optional(),
+  selectedConfig: z.unknown().optional(),
 })
 
 // ─── Default specs ────────────────────────────────────────────────────────────
@@ -192,6 +197,35 @@ export async function POST(request: NextRequest) {
       panelSpec = DEFAULT_PANEL
     }
 
+    // ── 2.5. Pricing quote (if user selected a tier) ──────────────────────
+    let quote: QuoteBreakdown | null = null
+    if (data.selectedConfig) {
+      try {
+        const catalogue = await loadCatalogue()
+        const roofType: RoofType = assumptions.roofPitchDeg < 10 ? 'flat' : 'pitched'
+        const ctx: PricingContext = {
+          catalogue,
+          annualKwh: data.annualKwh,
+          roofMaxPanels: solarInsights?.solarPotential.maxArrayPanelsCount ?? Math.max(panelCount, 6),
+          roofType,
+        }
+        // Server trusts the panelCount from the configurator's selection but caps to roofMaxPanels.
+        const cfg = data.selectedConfig as SystemConfig
+        const safeConfig: SystemConfig = {
+          ...cfg,
+          panelCount: Math.min(Math.max(1, Math.round(cfg.panelCount)), 50),
+        }
+        quote = computeQuote(safeConfig, ctx)
+        // Override the assumption so payback + 25-year projection use the real cost.
+        assumptions.systemCostPounds = quote.totalPounds
+        // Also align panelCount with the selected configuration so the layout matches.
+        panelCount = safeConfig.panelCount
+        systemSizeKw = (panelCount * panelSpec.wattPeak) / 1000
+      } catch (err) {
+        console.error('Pricing computeQuote failed:', err)
+      }
+    }
+
     // ── 3. Solar calculations ─────────────────────────────────────────────
     let results
 
@@ -309,6 +343,25 @@ export async function POST(request: NextRequest) {
       },
     })
 
+    // ── 5b. Save SystemConfiguration (if a tier was chosen) ───────────────
+    if (quote && data.selectedConfig) {
+      try {
+        await prisma.systemConfiguration.create({
+          data: {
+            reportId: report.id,
+            tier: data.selectedTier ?? 'custom',
+            configJson: JSON.stringify(data.selectedConfig),
+            lineItemsJson: JSON.stringify(quote),
+            totalPounds: quote.totalPounds,
+            vatRatePercent: quote.vatRatePercent,
+            catalogueVersion: CATALOGUE_VERSION,
+          },
+        })
+      } catch (cfgErr) {
+        console.error('Failed to persist SystemConfiguration:', cfgErr)
+      }
+    }
+
     // ── 6. Generate PDF ───────────────────────────────────────────────────
     const fullReportData: ReportData = {
       ...reportData,
@@ -317,6 +370,7 @@ export async function POST(request: NextRequest) {
       createdAt: report.createdAt.toISOString(),
       model3dImageUrl: report.model3dImageUrl,
       pdfUrl: null,
+      quote,
     }
 
     let pdfUrl: string | null = null

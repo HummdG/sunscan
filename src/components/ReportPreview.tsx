@@ -76,7 +76,7 @@ export function ReportPreview({ data }: ReportPreviewProps) {
     <div className="max-w-4xl mx-auto px-4 py-8 space-y-10">
 
        $args[0].Value -replace '─+', '-' -replace '─', '-' 
-      <div className="rounded-2xl bg-[#1E3A5F] text-white p-8">
+      <div className="rounded-2xl text-white p-8 relative overflow-hidden" style={{ background: 'linear-gradient(135deg, #B04020 0%, #8B3219 60%, #6B240F 100%)', boxShadow: '0 20px 60px rgba(120,40,15,0.25), 0 4px 12px rgba(120,40,15,0.15)' }}>
         <div className="flex items-start justify-between flex-wrap gap-4">
           <div>
             <div className="flex items-center gap-2 mb-2">

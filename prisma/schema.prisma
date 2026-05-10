@@ -48,4 +48,98 @@ model Report {
   solarCoveragePercent      Float?
   imageryQuality            String?
   mcsGenerationKwh          Float?
+  configuration             SystemConfiguration?
+}
+
+// ─── Pricing catalogue ──────────────────────────────────────────────────────
+
+model PricingPanel {
+  id           String  @id @default(cuid())
+  sku          String  @unique
+  modelName    String
+  manufacturer String
+  wattPeak     Int
+  widthMm      Int     @default(1134)
+  heightMm     Int     @default(1762)
+  depthMm      Int     @default(30)
+  upliftType   String  @default("base") // "base" | "percent" | "flat_per_panel"
+  upliftValue  Float   @default(0)      // 0.075 = +7.5%  OR  £/panel
+  isBase       Boolean @default(false)
+  isActive     Boolean @default(true)
+  sortOrder    Int     @default(0)
+}
+
+model PricingPvBasePrice {
+  panelCount Int   @id // 1..50
+  kwp        Float
+  priceGbp   Int
+}
+
+model PricingMounting {
+  id            String  @id @default(cuid())
+  sku           String  @unique // "MOUNT-PITCHED-TILE", "MOUNT-GROUND-15", "MOUNT-FLAT-VDV"
+  label         String
+  pricePerPanel Int     // 30, 50, 65
+  appliesTo     String  // "pitched" | "flat" | "ground"
+  isDefault     Boolean @default(false)
+  sortOrder     Int     @default(0)
+  isActive      Boolean @default(true)
+}
+
+model PricingBattery {
+  id                   String  @id @default(cuid())
+  sku                  String  @unique
+  modelName            String
+  tier                 String  // "standard" | "premium"
+  baseCapacityKwh      Float
+  priceWithSolar       Int
+  priceRetrofit        Int
+  expansionSku         String?
+  expansionCapacityKwh Float?
+  expansionPriceGbp    Int?
+  expansionMaxUnits    Int?
+  multiUnitDiscountGbp Int     @default(0) // Fox EVO: -£200 per additional EVO
+  sortOrder            Int     @default(0)
+  isActive             Boolean @default(true)
+}
+
+model PricingExtra {
+  id             String  @id @default(cuid())
+  sku            String  @unique
+  category       String  // "scaffold"|"general_electrical"|"ev"|"optimiser"|"bird_mesh"|"eps"|"microinverter"|"structural"
+  label          String
+  priceCalc      String  // "flat"|"per_panel"|"per_panel_with_threshold"|"fixed_plus_per_panel"
+  baseGbp        Int     @default(0)
+  perPanelGbp    Int     @default(0)
+  panelThreshold Int? // bird mesh: 20
+  isMandatory    Boolean @default(false) // admin fee
+  exclusiveGroup String? // "tigo", "eps"
+  sortOrder      Int     @default(0)
+  isActive       Boolean @default(true)
+}
+
+model PricingTrenching {
+  id          String  @id @default(cuid())
+  sku         String  @unique
+  surface     String  // "soft" | "hard"
+  metresFrom  Int
+  metresTo    Int? // null = bespoke
+  perMetreGbp Int
+  fixedFeeGbp Int
+  isBespoke   Boolean @default(false)
+  sortOrder   Int     @default(0)
+}
+
+model SystemConfiguration {
+  id               String   @id @default(cuid())
+  reportId         String   @unique
+  report           Report   @relation(fields: [reportId], references: [id], onDelete: Cascade)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  tier             String   // "essential"|"standard"|"premium"|"custom"
+  configJson       String   // SystemConfig — the user's selection
+  lineItemsJson    String   // QuoteBreakdown snapshot — fast read
+  totalPounds      Int
+  vatRatePercent   Int      @default(0)
+  catalogueVersion String   @default("2026-01")
 }
