@@ -2,6 +2,7 @@ import { notFound } from 'next/navigation'
 import { prisma } from '@/lib/db'
 import { ReportPreview } from '@/components/ReportPreview'
 import { SystemConfigurator } from '@/components/SystemConfigurator'
+import { SunscanMark } from '@/components/SunscanMark'
 import { hydrateReportData } from '@/lib/reportData'
 import { loadCatalogue } from '@/lib/pricing/catalogueLoader'
 import { computeQuote } from '@/lib/pricing/computeQuote'
@@ -83,15 +84,32 @@ export default async function ReportPage({ params }: Props) {
 
   return (
     <main className="min-h-screen" style={{ background: 'linear-gradient(180deg, #FAF6EC 0%, #F4ECD6 100%)' }}>
-      <div className="border-b backdrop-blur sticky top-0 z-10" style={{ background: 'rgba(250,246,236,0.85)', borderColor: 'rgba(176,64,32,0.12)' }}>
-        <div className="max-w-4xl mx-auto px-4 py-3 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <span style={{ color: '#D97706' }} className="text-lg">☀</span>
-            <span className="font-bold ss-heading" style={{ color: '#B04020' }}>SunScan</span>
+      <header
+        className="sticky top-0 z-50 border-b"
+        style={{
+          background: 'rgba(250,246,236,0.85)',
+          backdropFilter: 'blur(20px) saturate(180%)',
+          borderColor: 'var(--ss-border)',
+        }}
+      >
+        <div className="max-w-4xl mx-auto px-4 py-4 flex items-center justify-between gap-4">
+          <div className="flex items-center gap-2.5">
+            <SunscanMark size={32} />
+            <span
+              className="ss-heading font-bold text-lg tracking-wide"
+              style={{ color: 'var(--ss-t1)' }}
+            >
+              SUN<span style={{ color: 'var(--ss-blue)' }}>SCAN</span>
+            </span>
           </div>
-          <span className="text-sm" style={{ color: '#8A6440' }}>{report.quoteNumber}</span>
+          <span
+            className="ss-mono text-[11px] uppercase"
+            style={{ letterSpacing: '0.22em', color: 'var(--ss-t3)' }}
+          >
+            {report.quoteNumber}
+          </span>
         </div>
-      </div>
+      </header>
 
       <div className="max-w-4xl mx-auto px-4 pt-6">
         <SystemConfigurator

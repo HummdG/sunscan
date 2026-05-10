@@ -3,14 +3,13 @@
 import { useState, useRef, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { Button } from '@/components/ui/button'
-import { Progress } from '@/components/ui/progress'
 import { Badge } from '@/components/ui/badge'
 import { AddressSearch } from './AddressSearch'
 import { BillUpload } from './BillUpload'
 import { AssumptionsPanel } from './AssumptionsPanel'
 import { SolarRoofViewer } from './SolarRoofViewer'
 import { TierSelectStep } from './TierSelectStep'
-import { Sun, MapPin, FileText, Loader2, CheckCircle2, ChevronRight, ChevronLeft, AlertTriangle, ListChecks } from 'lucide-react'
+import { Sun, FileText, Loader2, CheckCircle2, ChevronRight, ChevronLeft, AlertTriangle, ListChecks, MapPin } from 'lucide-react'
 import type {
   OsAddress,
   OsBuilding,
@@ -39,11 +38,247 @@ const DEFAULT_BILL: BillData = {
 }
 
 const STEPS = [
-  { label: 'Address', icon: MapPin },
-  { label: 'Energy Bill', icon: FileText },
-  { label: 'Choose System', icon: ListChecks },
-  { label: 'Your Report', icon: Sun },
+  { label: 'Address', code: 'INTAKE', accent: 'var(--ss-blue)', icon: MapPin },
+  { label: 'Energy Bill', code: 'TARIFF', accent: 'var(--ss-amber)', icon: FileText },
+  { label: 'Choose System', code: 'CONFIG', accent: 'var(--ss-violet-l)', icon: ListChecks },
+  { label: 'Your Report', code: 'EXPORT', accent: 'var(--ss-green)', icon: Sun },
 ]
+
+// ─── Engineering stage strip — replaces the generic Progress bar ──────────────
+function StageStrip({ step }: { step: number }) {
+  return (
+    <ol className="grid grid-cols-2 md:grid-cols-4 gap-x-3 gap-y-4">
+      {STEPS.map((s, i) => {
+        const state = i < step ? 'done' : i === step ? 'active' : 'upcoming'
+        const accent =
+          state === 'done' ? 'var(--ss-amber)' :
+          state === 'active' ? 'var(--ss-blue)' :
+          'var(--ss-t4)'
+        return (
+          <li key={s.label}>
+            <div
+              className="ss-mono text-[10px] uppercase flex items-center gap-2 mb-1.5"
+              style={{ letterSpacing: '0.18em' }}
+            >
+              <span
+                style={{
+                  background: state !== 'upcoming' ? accent : 'transparent',
+                  border: state === 'upcoming' ? `1px solid ${accent}` : 'none',
+                  color: state !== 'upcoming' ? 'var(--ss-ink)' : accent,
+                  padding: '2px 6px',
+                  borderRadius: 2,
+                  fontWeight: 800,
+                  minWidth: 26,
+                  textAlign: 'center',
+                }}
+              >
+                {String(i + 1).padStart(2, '0')}
+              </span>
+              <span style={{ color: accent, fontWeight: 700 }}>{s.code}</span>
+              {state === 'done' && (
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke={accent} strokeWidth="3">
+                  <polyline points="20 6 9 17 4 12" />
+                </svg>
+              )}
+              {state === 'active' && (
+                <span
+                  className="w-1.5 h-1.5 rounded-full"
+                  style={{ background: accent, animation: 'ss-pulse-dot 1.4s ease infinite' }}
+                />
+              )}
+            </div>
+            <div
+              className="ss-heading text-[15px]"
+              style={{
+                color: state === 'upcoming' ? 'var(--ss-t4)' : 'var(--ss-t1)',
+                fontWeight: state === 'upcoming' ? 500 : 700,
+              }}
+            >
+              {s.label}
+            </div>
+            <div
+              className="h-0.5 mt-2"
+              style={{
+                background:
+                  state === 'done' ? accent :
+                  state === 'active' ? `linear-gradient(to right, ${accent} 50%, var(--ss-border) 50%)` :
+                  'var(--ss-border)',
+              }}
+            />
+          </li>
+        )
+      })}
+    </ol>
+  )
+}
+
+// ─── Live Spec — progressively fills with real data as user advances ──────────
+function LiveSpec({
+  step,
+  address,
+  building,
+  insights,
+  assumptions,
+  bill,
+  selectedTier,
+  presets,
+}: {
+  step: number
+  address: OsAddress | null
+  building: OsBuilding | null
+  insights: GoogleSolarBuildingInsights | null
+  assumptions: SolarAssumptions
+  bill: BillData
+  selectedTier: 'essential' | 'standard' | 'premium' | null
+  presets: TierPresetSummary[] | null
+}) {
+  const selectedPreset = selectedTier ? presets?.find(p => p.tier === selectedTier) ?? null : null
+  const roofUpdated = !!address && !!insights
+
+  type Row = { k: string; v: string | null; mono?: boolean; truncate?: boolean }
+  const sections: { num: string; code: string; stage: number; done: boolean; rows: Row[] }[] = [
+    {
+      num: '01', code: 'SITE', stage: 0, done: !!address,
+      rows: [
+        { k: 'Address', v: address?.address ?? null, truncate: true },
+        { k: 'Postcode', v: address?.postcode ?? null, mono: true },
+        { k: 'UPRN', v: address?.uprn ?? null, mono: true },
+        { k: 'Footprint', v: building?.areaM2 != null ? `${building.areaM2.toFixed(1)} m²` : null },
+      ],
+    },
+    {
+      num: '02', code: 'ROOF', stage: 0, done: roofUpdated,
+      rows: [
+        { k: 'Pitch', v: address ? `${Math.round(assumptions.roofPitchDeg)}°` : null },
+        { k: 'Azimuth', v: address ? `${Math.round(assumptions.roofOrientationDeg)}° from S` : null },
+      ],
+    },
+    {
+      num: '03', code: 'TARIFF', stage: 1, done: bill.source !== 'default',
+      rows: [
+        { k: 'Annual use', v: bill.source !== 'default' ? `${bill.annualKwh.toLocaleString()} kWh` : null },
+        { k: 'Unit rate', v: bill.source !== 'default' ? `${bill.tariffPencePerKwh}p / kWh` : null },
+        { k: 'Source', v: bill.source !== 'default' ? (bill.source === 'ocr' ? `OCR · ${bill.ocrConfidence ?? ''}`.trim() : 'Manual') : null, mono: true },
+      ],
+    },
+    {
+      num: '04', code: 'SYSTEM', stage: 2, done: !!selectedPreset,
+      rows: [
+        { k: 'Tier', v: selectedPreset ? selectedPreset.tier.charAt(0).toUpperCase() + selectedPreset.tier.slice(1) : null },
+        { k: 'Panels', v: selectedPreset ? String(selectedPreset.panelCount) : null },
+        { k: 'Capacity', v: selectedPreset ? `${selectedPreset.kwp.toFixed(2)} kWp` : null },
+        { k: 'Total', v: selectedPreset ? `£${selectedPreset.totalPounds.toLocaleString()}` : null, mono: true },
+      ],
+    },
+  ]
+
+  return (
+    <div className="flex flex-col h-full p-6 md:p-7">
+      {/* Header */}
+      <div
+        className="ss-mono text-[10px] uppercase pb-3 mb-5 flex items-center gap-2 flex-wrap"
+        style={{
+          letterSpacing: '0.22em',
+          color: 'var(--ss-t3)',
+          borderBottom: '1px dashed var(--ss-border-h)',
+        }}
+      >
+        <span className="inline-flex items-center gap-1.5" style={{ color: 'var(--ss-blue)' }}>
+          <span className="w-1.5 h-1.5 rounded-full" style={{ background: 'var(--ss-blue)' }} />
+          Live spec
+        </span>
+        <span style={{ color: 'var(--ss-t4)' }}>·</span>
+        <span>fills as you go</span>
+      </div>
+
+      <div className="space-y-5">
+        {sections.map((s) => {
+          const isActive = s.stage === step && !s.done
+          const accent = s.done ? 'var(--ss-amber)' : isActive ? 'var(--ss-blue)' : 'var(--ss-t4)'
+          return (
+            <div key={s.num}>
+              <div
+                className="ss-mono text-[10px] uppercase flex items-center gap-2 mb-2"
+                style={{ letterSpacing: '0.18em' }}
+              >
+                <span
+                  style={{
+                    background: s.done || isActive ? accent : 'transparent',
+                    border: !s.done && !isActive ? `1px solid ${accent}` : 'none',
+                    color: s.done || isActive ? 'var(--ss-ink)' : accent,
+                    padding: '1px 5px',
+                    borderRadius: 2,
+                    fontWeight: 800,
+                  }}
+                >
+                  {s.num}
+                </span>
+                <span style={{ color: accent, fontWeight: 700 }}>{s.code}</span>
+                {s.done && (
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke={accent} strokeWidth="3">
+                    <polyline points="20 6 9 17 4 12" />
+                  </svg>
+                )}
+                {isActive && (
+                  <span
+                    className="w-1.5 h-1.5 rounded-full"
+                    style={{ background: accent, animation: 'ss-pulse-dot 1.4s ease infinite' }}
+                  />
+                )}
+              </div>
+              <dl className="space-y-1">
+                {s.rows.map((r) => (
+                  <div
+                    key={r.k}
+                    className="flex items-baseline justify-between gap-3 text-[13px]"
+                  >
+                    <dt style={{ color: 'var(--ss-t3)' }}>{r.k}</dt>
+                    <dd
+                      className={`text-right ${r.mono ? 'ss-mono text-[11.5px]' : ''} ${r.truncate ? 'truncate max-w-[180px]' : ''}`}
+                      style={{
+                        color: r.v == null ? 'var(--ss-t4)' : 'var(--ss-t1)',
+                        fontWeight: r.v == null ? 400 : 600,
+                      }}
+                      title={r.v ?? undefined}
+                    >
+                      {r.v ?? '–'}
+                    </dd>
+                  </div>
+                ))}
+              </dl>
+            </div>
+          )
+        })}
+      </div>
+
+      {/* Footer — what they'll receive */}
+      <div className="mt-auto pt-5" style={{ borderTop: '1px dashed var(--ss-border-h)' }}>
+        <div
+          className="ss-mono text-[10px] uppercase flex items-center gap-2 mb-3"
+          style={{ letterSpacing: '0.22em', color: 'var(--ss-t3)' }}
+        >
+          <span style={{ color: 'var(--ss-amber)' }}>→</span>
+          <span>You&rsquo;ll receive</span>
+        </div>
+        <ul className="space-y-2 text-[12.5px]" style={{ color: 'var(--ss-t2)' }}>
+          {[
+            { c: 'var(--ss-blue)', t: 'MCS-aligned proposal PDF' },
+            { c: 'var(--ss-amber)', t: '25-year savings projection' },
+            { c: 'var(--ss-violet-l)', t: 'Interactive 3D roof model' },
+          ].map((i) => (
+            <li key={i.t} className="flex items-start gap-2">
+              <span
+                className="w-1 h-1 rounded-full mt-2 flex-shrink-0"
+                style={{ background: i.c }}
+              />
+              <span>{i.t}</span>
+            </li>
+          ))}
+        </ul>
+      </div>
+    </div>
+  )
+}
 
 export function SurveyForm() {
   const router = useRouter()
@@ -164,8 +399,8 @@ export function SurveyForm() {
           const mcsOri = Math.abs(((best.azimuthDegrees - 180 + 360) % 360) - 180)
           setAssumptions(prev => ({
             ...prev,
-            roofPitchDeg: Math.min(70, Math.max(5, best.pitchDegrees)),
-            roofOrientationDeg: mcsOri,
+            roofPitchDeg: Math.round(Math.min(70, Math.max(5, best.pitchDegrees))),
+            roofOrientationDeg: Math.round(mcsOri),
           }))
         }
       } else {
@@ -187,7 +422,7 @@ export function SurveyForm() {
     }
     const presetConfig = tierPresets.find((p) => p.tier === selectedTier)?.config
     if (!presetConfig) {
-      setError('Selected package not found — please re-select.')
+      setError('Selected package not found. Please re-select.')
       return
     }
 
@@ -238,194 +473,324 @@ export function SurveyForm() {
 
   void generating
 
+  const brandBtn: React.CSSProperties = {
+    background: 'var(--ss-blue)',
+    color: '#fff',
+    boxShadow: '0 0 20px rgba(176,64,32,0.22)',
+    border: 'none',
+  }
+  const ghostBtn: React.CSSProperties = {
+    background: 'transparent',
+    color: 'var(--ss-t2)',
+    border: '1px solid var(--ss-border-h)',
+  }
+
   return (
-    <div className="max-w-2xl mx-auto px-4 py-8 space-y-8">
-      {/* Progress */}
-      <div className="space-y-3">
-        <div className="flex justify-between text-sm">
-          {STEPS.map((s, i) => (
-            <div
-              key={s.label}
-              className={`flex items-center gap-1.5 ${i <= step ? 'text-foreground font-medium' : 'text-muted-foreground'}`}
-            >
-              <s.icon className="h-4 w-4" />
-              {s.label}
-            </div>
-          ))}
-        </div>
-        <Progress value={((step + 1) / STEPS.length) * 100} className="h-2" />
-      </div>
-
-      {/* Step 0: Address */}
-      {step === 0 && (
-        <div className="space-y-6">
-          <div>
-            <h1 className="text-2xl font-bold">Find your property</h1>
-            <p className="text-muted-foreground mt-1">
-              Start typing your UK address to find your property.
-            </p>
+    <div className="flex-1 grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_minmax(320px,400px)] w-full">
+      {/* ── Form column ─────────────────────────────────────────── */}
+      <div className="flex flex-col w-full">
+        {/* Stage strip — engineering-style replacement for Progress bar */}
+        <div
+          className="px-6 md:px-10 pt-7 md:pt-10 pb-6"
+          style={{ borderBottom: '1px dashed var(--ss-border)' }}
+        >
+          <div className="w-full max-w-[640px] mx-auto">
+            <StageStrip step={step} />
           </div>
+        </div>
 
-          <AddressSearch onAddressSelected={handleAddressSelected} />
-
-          {loadingSolar && (
-            <div className="flex items-center gap-2 p-3 rounded-lg bg-blue-50 border border-blue-200 text-sm text-blue-700 animate-pulse">
-              <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
-              <span>Fetching Google Solar analysis for this property…</span>
-            </div>
-          )}
-
-          {solarError && !loadingSolar && (
-            <div className="flex items-center gap-2 p-3 rounded-lg bg-amber-50 border border-amber-200 text-sm text-amber-800">
-              <AlertTriangle className="h-4 w-4 shrink-0" />
-              <span>{solarError}</span>
-            </div>
-          )}
-
-          {selectedAddress && !loadingSolar && (
-            <div className="space-y-4">
-              <div className="flex items-center gap-2 p-3 rounded-lg bg-green-50 border border-green-200 text-sm text-green-800">
-                <CheckCircle2 className="h-4 w-4 shrink-0" />
-                <span className="flex-1 font-medium">{selectedAddress.address}</span>
-                {solarInsights ? (
-                  <Badge variant="outline" className="text-green-700 border-green-300 bg-green-50 text-xs shrink-0">
-                    Google Solar loaded
-                  </Badge>
-                ) : (
-                  <Badge variant="outline" className="text-amber-700 border-amber-300 bg-amber-50 text-xs shrink-0">
-                    Estimated defaults
-                  </Badge>
-                )}
+        {/* Step content */}
+        <div className="flex-1 flex flex-col w-full max-w-[640px] mx-auto px-6 md:px-10 py-8 md:py-10 space-y-7">
+          {/* Step 0: Address */}
+          {step === 0 && (
+            <div className="space-y-6">
+              <div>
+                <h2
+                  className="ss-heading font-extrabold tracking-tight"
+                  style={{ fontSize: 'clamp(26px,3vw,36px)', color: 'var(--ss-t1)', lineHeight: 1.05 }}
+                >
+                  Find your property.
+                </h2>
+                <p className="mt-2 text-[15px] leading-relaxed" style={{ color: 'var(--ss-t3)' }}>
+                  Start typing your UK address. We lock onto the UPRN and pull the roof geometry from Ordnance Survey automatically.
+                </p>
               </div>
 
-              {solarInsights && (
-                <SolarRoofViewer
-                  insights={solarInsights}
-                  dataLayers={dataLayers}
-                  lat={selectedAddress.lat}
-                  lng={selectedAddress.lng}
-                  osBuilding={osBuilding}
-                  onCapture={(dataUrl) => { capturedModel3dRef.current = dataUrl }}
-                />
+              <AddressSearch onAddressSelected={handleAddressSelected} />
+
+              {loadingSolar && (
+                <div
+                  className="flex items-center gap-2 p-3 text-sm animate-pulse"
+                  style={{
+                    background: 'var(--ss-s2)',
+                    border: '1px solid var(--ss-border-h)',
+                    color: 'var(--ss-blue)',
+                    borderRadius: 4,
+                  }}
+                >
+                  <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
+                  <span>Fetching Google Solar analysis for this property…</span>
+                </div>
               )}
 
-              <AssumptionsPanel value={assumptions} onChange={setAssumptions} />
-            </div>
-          )}
-
-          <div className="flex justify-end">
-            <Button
-              onClick={() => setStep(1)}
-              disabled={!selectedAddress || loadingSolar}
-              className="gap-2"
-            >
-              Next: Energy Bill <ChevronRight className="h-4 w-4" />
-            </Button>
-          </div>
-        </div>
-      )}
-
-      {/* Step 1: Bill */}
-      {step === 1 && (
-        <div className="space-y-6">
-          <div>
-            <h1 className="text-2xl font-bold">Your energy usage</h1>
-            <p className="text-muted-foreground mt-1">
-              Upload your electricity bill for a personalised estimate, or use the UK average.
-            </p>
-          </div>
-
-          <BillUpload value={billData} onChange={setBillData} />
-
-          {error && (
-            <div className="p-3 rounded-lg bg-red-50 border border-red-200 text-sm text-red-800">
-              {error}
-            </div>
-          )}
-
-          <div className="flex justify-between">
-            <Button variant="outline" onClick={() => setStep(0)} className="gap-2">
-              <ChevronLeft className="h-4 w-4" /> Back
-            </Button>
-            <Button
-              onClick={handleLoadTiers}
-              disabled={loadingTiers}
-              className="gap-2 bg-[#B04020] hover:bg-[#8B3219]"
-            >
-              {loadingTiers ? (
-                <>
-                  <Loader2 className="h-4 w-4 animate-spin" /> Loading options…
-                </>
-              ) : (
-                <>
-                  Next: Choose System <ChevronRight className="h-4 w-4" />
-                </>
+              {solarError && !loadingSolar && (
+                <div
+                  className="flex items-center gap-2 p-3 text-sm"
+                  style={{
+                    background: 'rgba(217,119,6,0.10)',
+                    border: '1px solid rgba(217,119,6,0.35)',
+                    color: 'var(--ss-amber)',
+                    borderRadius: 4,
+                  }}
+                >
+                  <AlertTriangle className="h-4 w-4 shrink-0" />
+                  <span>{solarError}</span>
+                </div>
               )}
-            </Button>
-          </div>
-        </div>
-      )}
 
-      {/* Step 2: Tier select */}
-      {step === 2 && (
-        <div className="space-y-6">
-          <TierSelectStep
-            presets={tierPresets ?? []}
-            selectedTier={selectedTier}
-            onSelect={setSelectedTier}
-            roofMaxPanels={deriveRoofMaxPanels()}
-            loading={loadingTiers}
-          />
+              {selectedAddress && !loadingSolar && (
+                <div className="space-y-4">
+                  <div
+                    className="flex items-center gap-2 p-3 text-sm"
+                    style={{
+                      background: 'rgba(90,120,66,0.10)',
+                      border: '1px solid rgba(90,120,66,0.35)',
+                      color: 'var(--ss-green)',
+                      borderRadius: 4,
+                    }}
+                  >
+                    <CheckCircle2 className="h-4 w-4 shrink-0" />
+                    <span className="flex-1 font-medium" style={{ color: 'var(--ss-t1)' }}>
+                      {selectedAddress.address}
+                    </span>
+                    {solarInsights ? (
+                      <Badge
+                        variant="outline"
+                        className="text-xs shrink-0"
+                        style={{ color: 'var(--ss-green)', borderColor: 'rgba(90,120,66,0.35)', background: 'transparent' }}
+                      >
+                        Google Solar loaded
+                      </Badge>
+                    ) : (
+                      <Badge
+                        variant="outline"
+                        className="text-xs shrink-0"
+                        style={{ color: 'var(--ss-amber)', borderColor: 'rgba(217,119,6,0.35)', background: 'transparent' }}
+                      >
+                        Estimated defaults
+                      </Badge>
+                    )}
+                  </div>
 
-          {error && (
-            <div className="p-3 rounded-lg bg-red-50 border border-red-200 text-sm text-red-800">
-              {error}
+                  {solarInsights && (
+                    <SolarRoofViewer
+                      insights={solarInsights}
+                      dataLayers={dataLayers}
+                      lat={selectedAddress.lat}
+                      lng={selectedAddress.lng}
+                      osBuilding={osBuilding}
+                      onCapture={(dataUrl) => { capturedModel3dRef.current = dataUrl }}
+                    />
+                  )}
+
+                  <AssumptionsPanel value={assumptions} onChange={setAssumptions} />
+                </div>
+              )}
+
+              <div className="flex justify-end pt-2">
+                <Button
+                  onClick={() => setStep(1)}
+                  disabled={!selectedAddress || loadingSolar}
+                  className="ss-heading gap-2 px-5 py-5 text-[15px]"
+                  style={brandBtn}
+                >
+                  Next · Energy Bill <ChevronRight className="h-4 w-4" />
+                </Button>
+              </div>
             </div>
           )}
 
-          <div className="flex justify-between">
-            <Button variant="outline" onClick={() => setStep(1)} className="gap-2">
-              <ChevronLeft className="h-4 w-4" /> Back
-            </Button>
-            <Button
-              onClick={handleGenerate}
-              disabled={!selectedTier}
-              className="gap-2 bg-[#B04020] hover:bg-[#8B3219]"
-            >
-              <Sun className="h-4 w-4" /> Generate My Report
-            </Button>
-          </div>
-        </div>
-      )}
+          {/* Step 1: Bill */}
+          {step === 1 && (
+            <div className="space-y-6">
+              <div>
+                <h2
+                  className="ss-heading font-extrabold tracking-tight"
+                  style={{ fontSize: 'clamp(26px,3vw,36px)', color: 'var(--ss-t1)', lineHeight: 1.05 }}
+                >
+                  Your energy usage.
+                </h2>
+                <p className="mt-2 text-[15px] leading-relaxed" style={{ color: 'var(--ss-t3)' }}>
+                  Drop in an electricity bill and we&rsquo;ll read the unit rate, standing charge and annual kWh straight off the page.
+                  Or use the UK average. You can refine later.
+                </p>
+              </div>
 
-      {/* Step 3: Generating */}
-      {step === 3 && (
-        <div className="text-center space-y-6 py-12">
-          <div className="h-16 w-16 mx-auto rounded-full bg-amber-100 flex items-center justify-center">
-            <Loader2 className="h-8 w-8 text-amber-500 animate-spin" />
-          </div>
-          <div>
-            <h2 className="text-xl font-bold">Generating your solar report…</h2>
-            <p className="text-muted-foreground mt-2 text-sm">
-              Running solar calculations, designing your system, and creating your PDF proposal.
-            </p>
-          </div>
-          <div className="space-y-2 text-sm text-muted-foreground max-w-xs mx-auto">
-            <div className="flex items-center gap-2">
-              <CheckCircle2 className="h-4 w-4 text-green-500" />
-              Google Solar analysis loaded
+              <BillUpload value={billData} onChange={setBillData} />
+
+              {error && (
+                <div
+                  className="p-3 text-sm"
+                  style={{
+                    background: 'rgba(176,64,32,0.10)',
+                    border: '1px solid var(--ss-border-h)',
+                    color: 'var(--ss-blue)',
+                    borderRadius: 4,
+                  }}
+                >
+                  {error}
+                </div>
+              )}
+
+              <div className="flex justify-between pt-2">
+                <Button
+                  variant="outline"
+                  onClick={() => setStep(0)}
+                  className="ss-heading gap-2 px-5 py-5 text-[15px]"
+                  style={ghostBtn}
+                >
+                  <ChevronLeft className="h-4 w-4" /> Back
+                </Button>
+                <Button
+                  onClick={handleLoadTiers}
+                  disabled={loadingTiers}
+                  className="ss-heading gap-2 px-5 py-5 text-[15px]"
+                  style={brandBtn}
+                >
+                  {loadingTiers ? (
+                    <>
+                      <Loader2 className="h-4 w-4 animate-spin" /> Loading options…
+                    </>
+                  ) : (
+                    <>
+                      Next · Choose System <ChevronRight className="h-4 w-4" />
+                    </>
+                  )}
+                </Button>
+              </div>
             </div>
-            <div className="flex items-center gap-2">
-              <CheckCircle2 className="h-4 w-4 text-green-500" />
-              MCS irradiance zone: {selectedAddress?.postcode}
+          )}
+
+          {/* Step 2: Tier select */}
+          {step === 2 && (
+            <div className="space-y-6">
+              <div>
+                <h2
+                  className="ss-heading font-extrabold tracking-tight"
+                  style={{ fontSize: 'clamp(26px,3vw,36px)', color: 'var(--ss-t1)', lineHeight: 1.05 }}
+                >
+                  Choose your system.
+                </h2>
+                <p className="mt-2 text-[15px] leading-relaxed" style={{ color: 'var(--ss-t3)' }}>
+                  Three MCS-aligned packages sized to your usage. Pick one. Every figure on your report flows from this choice.
+                </p>
+              </div>
+
+              <TierSelectStep
+                presets={tierPresets ?? []}
+                selectedTier={selectedTier}
+                onSelect={setSelectedTier}
+                roofMaxPanels={deriveRoofMaxPanels()}
+                loading={loadingTiers}
+              />
+
+              {error && (
+                <div
+                  className="p-3 text-sm"
+                  style={{
+                    background: 'rgba(176,64,32,0.10)',
+                    border: '1px solid var(--ss-border-h)',
+                    color: 'var(--ss-blue)',
+                    borderRadius: 4,
+                  }}
+                >
+                  {error}
+                </div>
+              )}
+
+              <div className="flex justify-between pt-2">
+                <Button
+                  variant="outline"
+                  onClick={() => setStep(1)}
+                  className="ss-heading gap-2 px-5 py-5 text-[15px]"
+                  style={ghostBtn}
+                >
+                  <ChevronLeft className="h-4 w-4" /> Back
+                </Button>
+                <Button
+                  onClick={handleGenerate}
+                  disabled={!selectedTier}
+                  className="ss-heading gap-2 px-5 py-5 text-[15px]"
+                  style={brandBtn}
+                >
+                  <Sun className="h-4 w-4" /> Generate My Report
+                </Button>
+              </div>
             </div>
-            <div className="flex items-center gap-2">
-              <Loader2 className="h-4 w-4 animate-spin" />
-              Generating PDF report…
+          )}
+
+          {/* Step 3: Generating */}
+          {step === 3 && (
+            <div className="text-center space-y-6 py-16 flex-1 flex flex-col items-center justify-center">
+              <div
+                className="h-20 w-20 rounded-full flex items-center justify-center"
+                style={{
+                  background: 'var(--ss-s2)',
+                  border: '1px solid var(--ss-border-h)',
+                  boxShadow: '0 0 32px rgba(217,119,6,0.25)',
+                }}
+              >
+                <Loader2 className="h-9 w-9 animate-spin" style={{ color: 'var(--ss-amber)' }} />
+              </div>
+              <div>
+                <h2
+                  className="ss-heading font-extrabold tracking-tight"
+                  style={{ fontSize: 'clamp(24px,2.6vw,32px)', color: 'var(--ss-t1)' }}
+                >
+                  Generating your solar report…
+                </h2>
+                <p className="mt-2 text-[15px] leading-relaxed" style={{ color: 'var(--ss-t3)' }}>
+                  Running MCS calculations, packing the panel layout and rendering your PDF.
+                </p>
+              </div>
+              <ul className="text-[13px] max-w-xs w-full mx-auto space-y-2 text-left">
+                <li className="flex items-center gap-2" style={{ color: 'var(--ss-t2)' }}>
+                  <CheckCircle2 className="h-4 w-4" style={{ color: 'var(--ss-green)' }} />
+                  Google Solar analysis loaded
+                </li>
+                <li className="flex items-center gap-2" style={{ color: 'var(--ss-t2)' }}>
+                  <CheckCircle2 className="h-4 w-4" style={{ color: 'var(--ss-green)' }} />
+                  MCS irradiance zone · {selectedAddress?.postcode}
+                </li>
+                <li className="flex items-center gap-2" style={{ color: 'var(--ss-t3)' }}>
+                  <Loader2 className="h-4 w-4 animate-spin" style={{ color: 'var(--ss-amber)' }} />
+                  Generating PDF report…
+                </li>
+              </ul>
             </div>
-          </div>
+          )}
         </div>
-      )}
+      </div>
+
+      {/* ── Live Spec sidebar ────────────────────────────────────── */}
+      <aside
+        className="hidden lg:flex flex-col"
+        style={{
+          borderLeft: '1px dashed var(--ss-border-h)',
+          background: 'rgba(237,224,191,0.35)',
+        }}
+      >
+        <LiveSpec
+          step={step}
+          address={selectedAddress}
+          building={osBuilding}
+          insights={solarInsights}
+          assumptions={assumptions}
+          bill={billData}
+          selectedTier={selectedTier}
+          presets={tierPresets}
+        />
+      </aside>
     </div>
   )
 }

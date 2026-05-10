@@ -28,21 +28,37 @@ function StatCard({
   icon: Icon,
   value,
   label,
-  color = 'text-foreground',
+  color,
 }: {
-  icon: React.ComponentType<{ className?: string }>
+  icon: React.ComponentType<{ className?: string; style?: React.CSSProperties }>
   value: string
   label: string
   color?: string
 }) {
+  const accent = color ?? 'var(--ss-t1)'
   return (
-    <Card>
-      <CardContent className="pt-6 text-center">
-        <Icon className={`h-8 w-8 mx-auto mb-2 ${color}`} />
-        <div className={`text-2xl font-bold ${color}`}>{value}</div>
-        <div className="text-xs text-muted-foreground mt-1">{label}</div>
-      </CardContent>
-    </Card>
+    <div
+      className="relative px-4 py-5 text-center"
+      style={{
+        background: 'var(--ss-ink)',
+        border: '1px solid var(--ss-border-h)',
+        borderRadius: 4,
+      }}
+    >
+      <Icon className="h-8 w-8 mx-auto mb-2" style={{ color: accent }} />
+      <div
+        className="ss-heading text-2xl font-extrabold tracking-tight"
+        style={{ color: accent }}
+      >
+        {value}
+      </div>
+      <div
+        className="ss-mono text-[10px] uppercase mt-2"
+        style={{ letterSpacing: '0.18em', color: 'var(--ss-t3)' }}
+      >
+        {label}
+      </div>
+    </div>
   )
 }
 
@@ -75,7 +91,6 @@ export function ReportPreview({ data }: ReportPreviewProps) {
   return (
     <div className="max-w-4xl mx-auto px-4 py-8 space-y-10">
 
-       $args[0].Value -replace '─+', '-' -replace '─', '-' 
       <div className="rounded-2xl text-white p-8 relative overflow-hidden" style={{ background: 'linear-gradient(135deg, #B04020 0%, #8B3219 60%, #6B240F 100%)', boxShadow: '0 20px 60px rgba(120,40,15,0.25), 0 4px 12px rgba(120,40,15,0.15)' }}>
         <div className="flex items-start justify-between flex-wrap gap-4">
           <div>
@@ -105,20 +120,18 @@ export function ReportPreview({ data }: ReportPreviewProps) {
         )}
       </div>
 
-       $args[0].Value -replace '─+', '-' -replace '─', '-' 
       <div>
         <h2 className="text-lg font-semibold mb-4">Recommended System</h2>
         <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-          <StatCard icon={Sun} value={`${data.systemSizeKw.toFixed(2)} kWp`} label="System Size" color="text-amber-500" />
+          <StatCard icon={Sun} value={`${data.systemSizeKw.toFixed(2)} kWp`} label="System Size" color="var(--ss-amber)" />
           <StatCard icon={Home} value={String(data.panelCount)} label="Solar Panels" />
-          <StatCard icon={Zap} value={`${data.results.annualGenerationKwh.toLocaleString()} kWh`} label="Est. Annual Generation" color="text-blue-500" />
-          <StatCard icon={TrendingUp} value={`£${data.results.annualSavingsPounds.toLocaleString()}`} label="Est. Annual Savings" color="text-green-600" />
+          <StatCard icon={Zap} value={`${data.results.annualGenerationKwh.toLocaleString()} kWh`} label="Est. Annual Generation" color="var(--ss-blue)" />
+          <StatCard icon={TrendingUp} value={`£${data.results.annualSavingsPounds.toLocaleString()}`} label="Est. Annual Savings" color="var(--ss-green)" />
           <StatCard icon={TrendingUp} value={`${data.results.paybackYears} yrs`} label="Payback Period" />
-          <StatCard icon={Leaf} value={`${data.results.co2SavedTonnesPerYear} t`} label="CO₂ Avoided/Year" color="text-green-600" />
+          <StatCard icon={Leaf} value={`${data.results.co2SavedTonnesPerYear} t`} label="CO₂ Avoided/Year" color="var(--ss-green)" />
         </div>
       </div>
 
-       $args[0].Value -replace '─+', '-' -replace '─', '-' 
       <div>
         <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
           Roof Schematic
@@ -138,7 +151,6 @@ export function ReportPreview({ data }: ReportPreviewProps) {
         )}
       </div>
 
-       $args[0].Value -replace '─+', '-' -replace '─', '-' 
       <div>
         <h2 className="text-lg font-semibold mb-4">System Components</h2>
         <div className="grid md:grid-cols-2 gap-4">
@@ -186,7 +198,6 @@ export function ReportPreview({ data }: ReportPreviewProps) {
         </div>
       </div>
 
-       $args[0].Value -replace '─+', '-' -replace '─', '-' 
       <div>
         <h2 className="text-lg font-semibold mb-4">Monthly Generation</h2>
         <Card>
@@ -204,7 +215,6 @@ export function ReportPreview({ data }: ReportPreviewProps) {
         </Card>
       </div>
 
-       $args[0].Value -replace '─+', '-' -replace '─', '-' 
       <div className="grid md:grid-cols-2 gap-6">
         <div>
           <h2 className="text-lg font-semibold mb-4">Energy Usage Breakdown</h2>
@@ -243,7 +253,6 @@ export function ReportPreview({ data }: ReportPreviewProps) {
         </div>
       </div>
 
-       $args[0].Value -replace '─+', '-' -replace '─', '-' 
       <div>
         <h2 className="text-lg font-semibold mb-4">25-Year Investment Returns</h2>
         <Card>
@@ -272,7 +281,6 @@ export function ReportPreview({ data }: ReportPreviewProps) {
         </Card>
       </div>
 
-       $args[0].Value -replace '─+', '-' -replace '─', '-' 
       <div>
         <h2 className="text-lg font-semibold mb-4">Environmental Impact</h2>
         <div className="grid grid-cols-3 gap-4">
@@ -282,7 +290,6 @@ export function ReportPreview({ data }: ReportPreviewProps) {
         </div>
       </div>
 
-       $args[0].Value -replace '─+', '-' -replace '─', '-' 
       <div>
         <h2 className="text-lg font-semibold mb-4">Assumptions</h2>
         <Card>
@@ -291,8 +298,8 @@ export function ReportPreview({ data }: ReportPreviewProps) {
               {[
                 ['MCS Zone', data.mcsZone],
                 ['In-plane irradiance', `${Math.round(data.irradianceKwhPerM2)} kWh/m²/yr`],
-                ['Roof pitch', `${data.assumptions.roofPitchDeg}°`],
-                ['Roof orientation', `${data.assumptions.roofOrientationDeg}° from South`],
+                ['Roof pitch', `${Math.round(data.assumptions.roofPitchDeg)}°`],
+                ['Roof orientation', `${Math.round(data.assumptions.roofOrientationDeg)}° from South`],
                 ['Shading loss', `${(data.assumptions.shadingLoss * 100).toFixed(0)}%`],
                 ['Inverter loss', `${(data.assumptions.inverterLoss * 100).toFixed(0)}%`],
                 ['System loss', `${(data.assumptions.systemLoss * 100).toFixed(0)}%`],
@@ -310,7 +317,6 @@ export function ReportPreview({ data }: ReportPreviewProps) {
         </Card>
       </div>
 
-       $args[0].Value -replace '─+', '-' -replace '─', '-' 
       <div className="text-xs text-muted-foreground bg-muted/30 rounded-lg p-4 leading-relaxed">
         <strong>Disclaimer:</strong> This report is based on estimated data and is intended as a guide only. Actual solar generation,
         savings, and payback may vary depending on precise roof orientation, shading, system degradation, occupant behaviour, and future energy prices.

@@ -7,6 +7,10 @@ import {
   Image,
   StyleSheet,
   Font,
+  Svg,
+  Polygon,
+  Circle,
+  Line,
 } from '@react-pdf/renderer'
 import type { ReportData } from '@/lib/types'
 import {
@@ -18,13 +22,22 @@ import {
 import { lineItemsToRows, formatGbp } from './quotationTable'
 
 // ─── Styles ───────────────────────────────────────────────────────────────────
+// Sun-bleached cream palette — matches the web design system (--ss-* tokens).
+// Existing constant names kept (NAVY/GOLD/GREEN/LIGHT/MUTED/WHITE) to minimise
+// the diff against the rest of this file; their values now point at the
+// terracotta brand palette.
 
-const NAVY = '#1E3A5F'
-const GOLD = '#F59E0B'
-const GREEN = '#10B981'
-const LIGHT = '#F8FAFC'
-const MUTED = '#64748B'
-const WHITE = '#FFFFFF'
+const NAVY   = '#B04020' // primary brand (was navy)        — ss-blue (terracotta)
+const GOLD   = '#D97706' // deep amber accent (was gold)     — ss-amber
+const GREEN  = '#5A7842' // olive (was emerald)              — ss-green
+const LIGHT  = '#F4ECD6' // cream surface (was cool light)   — ss-s1
+const MUTED  = '#8A6440' // warm tertiary text (was slate)   — ss-t3
+const WHITE  = '#FFFFFF' // kept — text on terracotta cover
+const INK    = '#FAF6EC' // page parchment background        — ss-ink
+const T1     = '#2A1810' // primary near-black w/ warmth     — ss-t1
+const T2     = '#5C3A24' // coffee body                      — ss-t2
+const T4     = '#B19068' // sun-faded ochre                  — ss-t4
+const BORDER = '#DECB99' // warm divider                     — ss-s3
 
 const styles = StyleSheet.create({
   page: {
@@ -33,44 +46,89 @@ const styles = StyleSheet.create({
     padding: 0,
   },
   coverPage: {
-    backgroundColor: NAVY,
+    backgroundColor: WHITE,
     flexDirection: 'column',
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 60,
+    paddingTop: 44,
+    paddingBottom: 44,
+    paddingHorizontal: 56,
     height: '100%',
+    position: 'relative',
   },
-  coverTitle: {
-    fontSize: 36,
+  coverWordmark: {
+    fontSize: 15,
     fontFamily: 'Helvetica-Bold',
-    color: GOLD,
-    marginBottom: 8,
-    textAlign: 'center',
+    color: T1,
+    letterSpacing: 2.4,
   },
-  coverSubtitle: {
-    fontSize: 16,
-    color: WHITE,
-    marginBottom: 40,
-    textAlign: 'center',
+  coverWordmarkAccent: {
+    color: NAVY,
   },
-  coverAddress: {
-    fontSize: 20,
+  coverEyebrow: {
+    fontSize: 8,
+    color: MUTED,
+    letterSpacing: 2,
     fontFamily: 'Helvetica-Bold',
-    color: WHITE,
-    textAlign: 'center',
-    marginBottom: 8,
   },
-  coverDetail: {
-    fontSize: 12,
-    color: '#94A3B8',
-    textAlign: 'center',
-    marginBottom: 4,
+  coverSerifLine: {
+    fontFamily: 'Times-Roman',
+    color: T1,
+    fontSize: 64,
+    lineHeight: 0.98,
+    letterSpacing: -1,
   },
-  coverDivider: {
-    width: 60,
+  coverSerifAccent: {
+    fontFamily: 'Times-Italic',
+    color: NAVY,
+    fontSize: 64,
+    lineHeight: 0.98,
+    letterSpacing: -1,
+  },
+  coverAmberRule: {
+    width: 84,
     height: 3,
     backgroundColor: GOLD,
-    marginVertical: 24,
+  },
+  coverPreparedFor: {
+    fontSize: 8,
+    color: MUTED,
+    letterSpacing: 2,
+    fontFamily: 'Helvetica-Bold',
+  },
+  coverAddress: {
+    fontSize: 19,
+    fontFamily: 'Helvetica-Bold',
+    color: T1,
+    lineHeight: 1.25,
+  },
+  coverMetaLabel: {
+    fontSize: 7,
+    color: MUTED,
+    letterSpacing: 1.8,
+    fontFamily: 'Helvetica-Bold',
+    width: 64,
+  },
+  coverMetaValue: {
+    fontSize: 11,
+    fontFamily: 'Helvetica-Bold',
+    color: T1,
+  },
+  coverFooter: {
+    fontSize: 7,
+    color: T4,
+    letterSpacing: 2.2,
+    textAlign: 'center',
+  },
+  coverHairline: {
+    height: 1,
+    backgroundColor: BORDER,
+  },
+  coverSideStripe: {
+    position: 'absolute',
+    top: 0,
+    bottom: 0,
+    left: 0,
+    width: 6,
+    backgroundColor: NAVY,
   },
   sectionPage: {
     padding: 40,
@@ -93,7 +151,7 @@ const styles = StyleSheet.create({
   },
   body: {
     fontSize: 11,
-    color: '#334155',
+    color: T2,
     lineHeight: 1.6,
     marginBottom: 8,
   },
@@ -109,7 +167,7 @@ const styles = StyleSheet.create({
   value: {
     fontSize: 10,
     fontFamily: 'Helvetica-Bold',
-    color: '#1E293B',
+    color: T1,
     flex: 1,
   },
   statCard: {
@@ -154,18 +212,18 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     padding: 6,
     borderBottomWidth: 1,
-    borderBottomColor: '#E2E8F0',
+    borderBottomColor: BORDER,
   },
   tableRowAlt: {
     flexDirection: 'row',
     padding: 6,
     backgroundColor: LIGHT,
     borderBottomWidth: 1,
-    borderBottomColor: '#E2E8F0',
+    borderBottomColor: BORDER,
   },
   tableCell: {
     fontSize: 9,
-    color: '#334155',
+    color: T2,
     flex: 1,
     textAlign: 'center',
   },
@@ -199,6 +257,58 @@ const styles = StyleSheet.create({
     marginBottom: 32,
   },
 })
+
+// ─── Brand mark — SunScan hexagon with sun glyph (PDF SVG) ───────────────────
+
+function SunscanMark({ size = 34 }: { size?: number }) {
+  // Hexagon (flat-top) inscribed in a 36×36 viewBox. Sun body + 8 rays in cream.
+  return (
+    <Svg width={size} height={size} viewBox="0 0 36 36">
+      <Polygon points="18,1 35,10 35,26 18,35 1,26 1,10" fill={NAVY} />
+      <Circle cx="18" cy="18" r="5.4" fill={INK} />
+      {/* Cardinal rays */}
+      <Line x1="18" y1="9.6" x2="18" y2="6.2" stroke={INK} strokeWidth={1.7} strokeLinecap="round" />
+      <Line x1="18" y1="26.4" x2="18" y2="29.8" stroke={INK} strokeWidth={1.7} strokeLinecap="round" />
+      <Line x1="9.6" y1="18" x2="6.2" y2="18" stroke={INK} strokeWidth={1.7} strokeLinecap="round" />
+      <Line x1="26.4" y1="18" x2="29.8" y2="18" stroke={INK} strokeWidth={1.7} strokeLinecap="round" />
+      {/* Ordinal rays */}
+      <Line x1="12" y1="12" x2="9.4" y2="9.4" stroke={INK} strokeWidth={1.7} strokeLinecap="round" />
+      <Line x1="24" y1="12" x2="26.6" y2="9.4" stroke={INK} strokeWidth={1.7} strokeLinecap="round" />
+      <Line x1="12" y1="24" x2="9.4" y2="26.6" stroke={INK} strokeWidth={1.7} strokeLinecap="round" />
+      <Line x1="24" y1="24" x2="26.6" y2="26.6" stroke={INK} strokeWidth={1.7} strokeLinecap="round" />
+    </Svg>
+  )
+}
+
+// ─── Engineering corner brackets — absolute-positioned around a Page ─────────
+
+function CornerBrackets({
+  size = 14,
+  thickness = 1.6,
+  color = NAVY,
+  inset = 20,
+}: { size?: number; thickness?: number; color?: string; inset?: number }) {
+  const common = { width: size, height: size, position: 'absolute' as const }
+  return (
+    <>
+      <View style={{ ...common, top: inset, left: inset, borderTopWidth: thickness, borderLeftWidth: thickness, borderTopColor: color, borderLeftColor: color }} />
+      <View style={{ ...common, top: inset, right: inset, borderTopWidth: thickness, borderRightWidth: thickness, borderTopColor: color, borderRightColor: color }} />
+      <View style={{ ...common, bottom: inset, left: inset, borderBottomWidth: thickness, borderLeftWidth: thickness, borderBottomColor: color, borderLeftColor: color }} />
+      <View style={{ ...common, bottom: inset, right: inset, borderBottomWidth: thickness, borderRightWidth: thickness, borderBottomColor: color, borderRightColor: color }} />
+    </>
+  )
+}
+
+// ─── Cover metadata row (engineering title-block style) ──────────────────────
+
+function CoverMetaRow({ k, v, accent }: { k: string; v: string; accent?: string }) {
+  return (
+    <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 7 }}>
+      <Text style={styles.coverMetaLabel}>{k}</Text>
+      <Text style={accent ? [styles.coverMetaValue, { color: accent }] : styles.coverMetaValue}>{v}</Text>
+    </View>
+  )
+}
 
 // ─── Helper components ────────────────────────────────────────────────────────
 
@@ -247,28 +357,79 @@ export function ReportDocument({ data, model3dImage }: ReportDocumentProps) {
 
   return (
     <Document
-      title={`SunScan Solar Proposal — ${data.addressRaw}`}
+      title={`SunScan Solar Proposal · ${data.addressRaw}`}
       author="SunScan"
       subject="Solar PV Proposal"
     >
-       $args[0].Value -replace '─+', '-' -replace '─', '-' 
       <Page size="A4" style={styles.page}>
         <View style={styles.coverPage}>
-          <Text style={styles.coverTitle}>☀ SunScan</Text>
-          <Text style={styles.coverSubtitle}>Solar Survey & Proposal</Text>
-          <View style={styles.coverDivider} />
-          <Text style={styles.coverAddress}>{data.addressRaw}</Text>
-          <Text style={styles.coverDetail}>Quote Reference: {data.quoteNumber}</Text>
-          <Text style={styles.coverDetail}>
-            Date: {new Date(data.createdAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}
-          </Text>
-          <View style={styles.coverDivider} />
-          <Text style={styles.coverDetail}>Prepared by SunScan · www.sunscan.co.uk</Text>
-          <Text style={styles.coverDetail}>This proposal is valid for 30 days from the date above.</Text>
+          {/* Left edge brand register stripe */}
+          <View style={styles.coverSideStripe} />
+
+          {/* Engineering corner brackets */}
+          <CornerBrackets size={16} thickness={1.6} color={NAVY} inset={28} />
+
+          {/* ─── Top band: hex logo + wordmark · doc reference ─────────────── */}
+          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+              <SunscanMark size={36} />
+              <View style={{ marginLeft: 10 }}>
+                <Text style={styles.coverWordmark}>
+                  SUN<Text style={styles.coverWordmarkAccent}>SCAN</Text>
+                </Text>
+                <Text style={[styles.coverEyebrow, { marginTop: 3 }]}>
+                  SOLAR · ENGINEERING-GRADE
+                </Text>
+              </View>
+            </View>
+            <View style={{ alignItems: 'flex-end' }}>
+              <Text style={styles.coverEyebrow}>DOC · {data.quoteNumber}</Text>
+              <Text style={[styles.coverEyebrow, { marginTop: 3, color: T4 }]}>
+                REV · 01 / MCS-2024
+              </Text>
+            </View>
+          </View>
+
+          {/* Top divider */}
+          <View style={[styles.coverHairline, { marginTop: 16 }]} />
+
+          {/* ─── Main editorial title block ─────────────────────────────────── */}
+          <View style={{ flex: 1, justifyContent: 'center', paddingTop: 28, paddingBottom: 16 }}>
+            <Text style={styles.coverSerifLine}>Solar Survey</Text>
+            <Text style={styles.coverSerifAccent}>& Proposal.</Text>
+
+            <View style={[styles.coverAmberRule, { marginTop: 30, marginBottom: 26 }]} />
+
+            <Text style={[styles.coverPreparedFor, { marginBottom: 10 }]}>PREPARED FOR</Text>
+            <Text style={styles.coverAddress}>{data.addressRaw}</Text>
+          </View>
+
+          {/* Bottom hairline */}
+          <View style={styles.coverHairline} />
+
+          {/* ─── Bottom title block: metadata grid ──────────────────────────── */}
+          <View style={{ paddingTop: 18, paddingBottom: 8 }}>
+            <CoverMetaRow k="QUOTE" v={data.quoteNumber} />
+            <CoverMetaRow
+              k="DATE"
+              v={new Date(data.createdAt).toLocaleDateString('en-GB', {
+                day: 'numeric',
+                month: 'long',
+                year: 'numeric',
+              })}
+            />
+            <CoverMetaRow k="VALID" v="30 days from issue" />
+          </View>
+
+          {/* Bottom footer */}
+          <View style={{ paddingTop: 10 }}>
+            <Text style={styles.coverFooter}>
+              SUNSCAN  ·  WWW.SUNSCAN.CO.UK  ·  MCS-ALIGNED SOLAR ENGINEERING
+            </Text>
+          </View>
         </View>
       </Page>
 
-       $args[0].Value -replace '─+', '-' -replace '─', '-' 
       <Page size="A4" style={styles.page}>
         <View style={styles.sectionPage}>
           <PageHeader title="Recommended Solar System" />
@@ -288,7 +449,7 @@ export function ReportDocument({ data, model3dImage }: ReportDocumentProps) {
               <Text style={styles.subHeader}>3D Visualisation</Text>
               <Image src={model3dImage} style={{ width: '100%', maxHeight: 220, objectFit: 'contain', borderRadius: 6 }} />
               {isEstimatedFootprint && (
-                <Text style={styles.estimatedTag}>⚠ Building footprint is estimated — exact panel placement may vary</Text>
+                <Text style={styles.estimatedTag}>⚠ Building footprint is estimated. Exact panel placement may vary.</Text>
               )}
             </View>
           )}
@@ -296,12 +457,11 @@ export function ReportDocument({ data, model3dImage }: ReportDocumentProps) {
         <Text style={styles.pageNumber} render={({ pageNumber, totalPages }) => `${pageNumber} / ${totalPages}`} fixed />
       </Page>
 
-       $args[0].Value -replace '─+', '-' -replace '─', '-' 
       <Page size="A4" style={styles.page}>
         <View style={styles.sectionPage}>
           <PageHeader title="System Components" />
 
-          <Text style={styles.subHeader}>Solar Panels — {data.panelCount}×</Text>
+          <Text style={styles.subHeader}>Solar Panels · {data.panelCount}×</Text>
           <DataRow label="Model" value={data.panelSpec.modelName} />
           <DataRow label="Watt Peak" value={`${data.panelSpec.wattPeak}W`} />
           <DataRow label="Dimensions" value={`${data.panelSpec.heightMm}mm × ${data.panelSpec.widthMm}mm × ${data.panelSpec.depthMm}mm`} />
@@ -324,7 +484,6 @@ export function ReportDocument({ data, model3dImage }: ReportDocumentProps) {
         <Text style={styles.pageNumber} render={({ pageNumber, totalPages }) => `${pageNumber} / ${totalPages}`} fixed />
       </Page>
 
-       $args[0].Value -replace '─+', '-' -replace '─', '-' 
       <Page size="A4" style={styles.page}>
         <View style={styles.sectionPage}>
           <PageHeader title="System Performance" />
@@ -355,7 +514,6 @@ export function ReportDocument({ data, model3dImage }: ReportDocumentProps) {
         <Text style={styles.pageNumber} render={({ pageNumber, totalPages }) => `${pageNumber} / ${totalPages}`} fixed />
       </Page>
 
-       $args[0].Value -replace '─+', '-' -replace '─', '-' 
       <Page size="A4" style={styles.page}>
         <View style={styles.sectionPage}>
           <PageHeader title="Financial Analysis" />
@@ -381,7 +539,6 @@ export function ReportDocument({ data, model3dImage }: ReportDocumentProps) {
         <Text style={styles.pageNumber} render={({ pageNumber, totalPages }) => `${pageNumber} / ${totalPages}`} fixed />
       </Page>
 
-       $args[0].Value -replace '─+', '-' -replace '─', '-' 
       <Page size="A4" style={styles.page}>
         <View style={styles.sectionPage}>
           <PageHeader title="Environmental Benefits" />
@@ -393,14 +550,13 @@ export function ReportDocument({ data, model3dImage }: ReportDocumentProps) {
           <Text style={styles.body}>
             Your solar system will generate clean electricity from sunlight, displacing electricity that would otherwise be generated by the UK grid.
             Based on the current UK grid carbon intensity of 0.233 kgCO₂/kWh (DESNZ 2024), your system will avoid approximately{' '}
-            {data.results.co2SavedTonnesPerYear} tonnes of CO₂ per year — equivalent to planting around{' '}
+            {data.results.co2SavedTonnesPerYear} tonnes of CO₂ per year, equivalent to planting around{' '}
             {Math.round(data.results.co2SavedTonnesPerYear * 45)} trees.
           </Text>
         </View>
         <Text style={styles.pageNumber} render={({ pageNumber, totalPages }) => `${pageNumber} / ${totalPages}`} fixed />
       </Page>
 
-       $args[0].Value -replace '─+', '-' -replace '─', '-' 
       <Page size="A4" style={styles.page}>
         <View style={styles.sectionPage}>
           <PageHeader title="Quotation" />
@@ -422,7 +578,7 @@ export function ReportDocument({ data, model3dImage }: ReportDocumentProps) {
                       <Text
                         style={[
                           styles.tableCell,
-                          { flex: 3, textAlign: 'left', color: NAVY, fontFamily: 'Helvetica-Bold' },
+                          { flex: 3, textAlign: 'left', color: T1, fontFamily: 'Helvetica-Bold' },
                         ]}
                       >
                         {row.label}
@@ -451,11 +607,11 @@ export function ReportDocument({ data, model3dImage }: ReportDocumentProps) {
                     { flex: 3, textAlign: 'left', color: WHITE, fontFamily: 'Helvetica-Bold' },
                   ]}
                 >
-                  TOTAL (VAT {data.quote.vatRatePercent}% — domestic solar)
+                  TOTAL (VAT {data.quote.vatRatePercent}% · domestic solar)
                 </Text>
                 <Text style={styles.tableCell} />
                 <Text style={styles.tableCell} />
-                <Text style={[styles.tableCell, { color: GOLD, fontFamily: 'Helvetica-Bold' }]}>
+                <Text style={[styles.tableCell, { color: WHITE, fontFamily: 'Helvetica-Bold' }]}>
                   {formatGbp(data.quote.totalPounds)}
                 </Text>
               </View>
@@ -477,10 +633,10 @@ export function ReportDocument({ data, model3dImage }: ReportDocumentProps) {
                 </View>
               ))}
               <View style={[styles.tableRow, { backgroundColor: NAVY }]}>
-                <Text style={[styles.tableCell, { flex: 3, textAlign: 'left', color: WHITE, fontFamily: 'Helvetica-Bold' }]}>TOTAL (VAT 0% — domestic solar)</Text>
+                <Text style={[styles.tableCell, { flex: 3, textAlign: 'left', color: WHITE, fontFamily: 'Helvetica-Bold' }]}>TOTAL (VAT 0% · domestic solar)</Text>
                 <Text style={styles.tableCell} />
                 <Text style={styles.tableCell} />
-                <Text style={[styles.tableCell, { color: GOLD, fontFamily: 'Helvetica-Bold' }]}>£{data.assumptions.systemCostPounds.toLocaleString()}</Text>
+                <Text style={[styles.tableCell, { color: WHITE, fontFamily: 'Helvetica-Bold' }]}>£{data.assumptions.systemCostPounds.toLocaleString()}</Text>
               </View>
             </>
           )}
@@ -493,7 +649,6 @@ export function ReportDocument({ data, model3dImage }: ReportDocumentProps) {
         <Text style={styles.pageNumber} render={({ pageNumber, totalPages }) => `${pageNumber} / ${totalPages}`} fixed />
       </Page>
 
-       $args[0].Value -replace '─+', '-' -replace '─', '-' 
       <Page size="A4" style={styles.page}>
         <View style={styles.sectionPage}>
           <PageHeader title="Assumptions & Disclaimer" />
@@ -501,8 +656,8 @@ export function ReportDocument({ data, model3dImage }: ReportDocumentProps) {
           <Text style={styles.subHeader}>Calculation Assumptions</Text>
           <DataRow label="MCS Zone" value={data.mcsZone} />
           <DataRow label="In-Plane Irradiance" value={`${Math.round(data.irradianceKwhPerM2)} kWh/m²/year`} />
-          <DataRow label="Roof Pitch" value={`${data.assumptions.roofPitchDeg}°`} estimated={isEstimatedFootprint} />
-          <DataRow label="Roof Orientation" value={`${data.assumptions.roofOrientationDeg}° from South`} estimated={isEstimatedFootprint} />
+          <DataRow label="Roof Pitch" value={`${Math.round(data.assumptions.roofPitchDeg)}°`} estimated={isEstimatedFootprint} />
+          <DataRow label="Roof Orientation" value={`${Math.round(data.assumptions.roofOrientationDeg)}° from South`} estimated={isEstimatedFootprint} />
           <DataRow label="Shading Loss" value={`${(data.assumptions.shadingLoss * 100).toFixed(0)}%`} />
           <DataRow label="Inverter Loss" value={`${(data.assumptions.inverterLoss * 100).toFixed(0)}%`} />
           <DataRow label="System Loss" value={`${(data.assumptions.systemLoss * 100).toFixed(0)}%`} />
@@ -517,7 +672,7 @@ export function ReportDocument({ data, model3dImage }: ReportDocumentProps) {
 
           {isEstimatedBill && (
             <Text style={[styles.estimatedTag, { marginTop: 8 }]}>
-              ⚠ Annual consumption defaulted to UK average (3,500 kWh) — no electricity bill was provided.
+              ⚠ Annual consumption defaulted to UK average (3,500 kWh). No electricity bill was provided.
               Actual savings may differ. Upload a bill for a personalised estimate.
             </Text>
           )}

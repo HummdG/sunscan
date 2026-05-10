@@ -1,146 +1,287 @@
 'use client'
 
-import { Card, CardContent } from '@/components/ui/card'
-import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
-import { Check, Sparkles, AlertTriangle } from 'lucide-react'
+import { useState, type KeyboardEvent } from 'react'
+import { AlertTriangle, Check } from 'lucide-react'
 import type { TierPresetSummary } from '@/lib/pricing/types'
+
+type Tier = 'essential' | 'standard' | 'premium'
 
 interface Props {
   presets: TierPresetSummary[]
-  selectedTier: 'essential' | 'standard' | 'premium' | null
-  onSelect: (tier: 'essential' | 'standard' | 'premium') => void
+  selectedTier: Tier | null
+  onSelect: (tier: Tier) => void
   roofMaxPanels: number
   loading?: boolean
 }
 
-const TIER_ACCENT: Record<'essential' | 'standard' | 'premium', { ring: string; pill: string }> = {
-  essential: { ring: 'ring-slate-200', pill: 'bg-slate-100 text-slate-700' },
-  standard: { ring: 'ring-amber-300', pill: 'bg-amber-100 text-amber-800' },
-  premium: { ring: 'ring-violet-300', pill: 'bg-violet-100 text-violet-800' },
+const TIER_META: Record<Tier, { num: string; label: string; tagline: string; accent: string }> = {
+  essential: {
+    num: '01',
+    label: 'Essential',
+    tagline: 'Solid PV-only setup. The clean entry point.',
+    accent: 'var(--ss-t2)',
+  },
+  standard: {
+    num: '02',
+    label: 'Standard',
+    tagline: 'PV + battery. The most popular spec for UK homes.',
+    accent: 'var(--ss-amber)',
+  },
+  premium: {
+    num: '03',
+    label: 'Premium',
+    tagline: 'High-yield bifacial with 10 kWh storage & backup.',
+    accent: 'var(--ss-violet-l)',
+  },
 }
 
-const TIER_LABEL: Record<'essential' | 'standard' | 'premium', string> = {
-  essential: 'Essential',
-  standard: 'Standard',
-  premium: 'Premium',
-}
-
-const TIER_TAGLINE: Record<'essential' | 'standard' | 'premium', string> = {
-  essential: 'Solid PV-only setup. Best entry point.',
-  standard: 'PV + battery. Most popular for UK homes.',
-  premium: 'High-yield bifacial + 10 kWh battery & backup.',
-}
+const INCLUSIONS_PREVIEW = 4
 
 function formatGbp(n: number): string {
   return `£${n.toLocaleString('en-GB')}`
 }
 
-export function TierSelectStep({ presets, selectedTier, onSelect, roofMaxPanels, loading }: Props) {
+export function TierSelectStep({
+  presets,
+  selectedTier,
+  onSelect,
+  roofMaxPanels,
+  loading,
+}: Props) {
   return (
-    <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold">Choose your system</h1>
-        <p className="text-muted-foreground mt-1">
-          Three pre-configured packages tailored to your roof and energy use. You can fine-tune
-          everything on the next page.
-        </p>
-      </div>
-
+    <div className="space-y-4">
       {roofMaxPanels < 6 && (
-        <div className="flex items-start gap-2 p-3 rounded-lg bg-amber-50 border border-amber-200 text-sm text-amber-800">
+        <div
+          className="flex items-start gap-2 p-3 text-sm"
+          style={{
+            background: 'rgba(217,119,6,0.10)',
+            border: '1px solid rgba(217,119,6,0.35)',
+            color: 'var(--ss-amber)',
+            borderRadius: 4,
+          }}
+        >
           <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
           <span>
-            Your roof only fits about {roofMaxPanels} panels — all packages are sized to your roof.
-            Differences come from panel quality, battery, and add-ons rather than system size.
+            Your roof only fits about {roofMaxPanels} panels. All packages are sized to your roof.
+            Differences come from panel quality, battery and add-ons, not system size.
           </span>
         </div>
       )}
 
       {loading && (
-        <div className="grid gap-4 md:grid-cols-3">
-          {(['essential', 'standard', 'premium'] as const).map((tier) => (
-            <Card key={tier} className="animate-pulse">
-              <CardContent className="p-6 space-y-3">
-                <div className="h-5 bg-slate-200 rounded w-1/2" />
-                <div className="h-4 bg-slate-200 rounded w-3/4" />
-                <div className="h-8 bg-slate-200 rounded w-1/3 mt-6" />
-              </CardContent>
-            </Card>
+        <div className="space-y-3">
+          {[0, 1, 2].map((i) => (
+            <div
+              key={i}
+              className="animate-pulse h-[140px]"
+              style={{
+                background: 'var(--ss-s2)',
+                border: '1px solid var(--ss-border)',
+                borderRadius: 4,
+              }}
+            />
           ))}
         </div>
       )}
 
       {!loading && (
-        <div className="grid gap-4 md:grid-cols-3">
-          {presets.map((preset) => {
-            const isSelected = selectedTier === preset.tier
-            const accent = TIER_ACCENT[preset.tier]
-            const isMostPopular = preset.tier === 'standard'
-            return (
-              <Card
-                key={preset.tier}
-                className={`relative transition-all ${
-                  isSelected
-                    ? `ring-2 ${accent.ring} shadow-lg`
-                    : 'hover:shadow-md cursor-pointer'
-                }`}
-                onClick={() => onSelect(preset.tier)}
-              >
-                {isMostPopular && (
-                  <div className="absolute -top-3 left-1/2 -translate-x-1/2">
-                    <Badge className="bg-amber-500 hover:bg-amber-500 text-white border-0 shadow-sm gap-1">
-                      <Sparkles className="h-3 w-3" /> Most popular
-                    </Badge>
-                  </div>
-                )}
-                <CardContent className="p-6 space-y-4">
-                  <div className="space-y-1">
-                    <div className={`inline-block px-2 py-0.5 rounded text-xs font-semibold ${accent.pill}`}>
-                      {TIER_LABEL[preset.tier]}
-                    </div>
-                    <p className="text-sm text-muted-foreground pt-1">{TIER_TAGLINE[preset.tier]}</p>
-                  </div>
+        <ol className="space-y-3">
+          {presets.map((preset) => (
+            <li key={preset.tier}>
+              <TierRow
+                preset={preset}
+                isSelected={selectedTier === preset.tier}
+                onSelect={onSelect}
+              />
+            </li>
+          ))}
+        </ol>
+      )}
+    </div>
+  )
+}
 
-                  <div>
-                    <div className="text-3xl font-bold tracking-tight">
-                      {formatGbp(preset.totalPounds)}
-                    </div>
-                    <div className="text-xs text-muted-foreground">
-                      {preset.panelCount} panels · {preset.kwp.toFixed(2)} kWp · 0% VAT
-                    </div>
-                  </div>
+function TierRow({
+  preset,
+  isSelected,
+  onSelect,
+}: {
+  preset: TierPresetSummary
+  isSelected: boolean
+  onSelect: (tier: Tier) => void
+}) {
+  const [expanded, setExpanded] = useState(false)
+  const meta = TIER_META[preset.tier]
+  const isPopular = preset.tier === 'standard'
+  const extra = preset.inclusions.length - INCLUSIONS_PREVIEW
+  const visibleInclusions = expanded
+    ? preset.inclusions
+    : preset.inclusions.slice(0, INCLUSIONS_PREVIEW)
 
-                  <ul className="space-y-1.5 text-sm">
-                    {preset.inclusions.map((line) => (
-                      <li key={line} className="flex items-start gap-2">
-                        <Check className="h-4 w-4 text-green-600 shrink-0 mt-0.5" />
-                        <span className="text-foreground/80">{line}</span>
-                      </li>
-                    ))}
-                  </ul>
+  const handleSelect = () => onSelect(preset.tier)
+  const handleKey = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault()
+      handleSelect()
+    }
+  }
 
-                  <Button
-                    variant={isSelected ? 'default' : 'outline'}
-                    className={`w-full ${isSelected ? 'bg-[#B04020] hover:bg-[#8B3219]' : ''}`}
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      onSelect(preset.tier)
-                    }}
-                  >
-                    {isSelected ? (
-                      <>
-                        <Check className="h-4 w-4 mr-1" /> Selected
-                      </>
-                    ) : (
-                      'Choose this system'
-                    )}
-                  </Button>
-                </CardContent>
-              </Card>
-            )
-          })}
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      aria-pressed={isSelected}
+      onClick={handleSelect}
+      onKeyDown={handleKey}
+      className="relative w-full text-left transition-all focus-visible:outline-none focus-visible:ring-2"
+      style={{
+        background: isSelected ? 'var(--ss-s2)' : 'var(--ss-ink)',
+        border: `1px solid ${isSelected ? meta.accent : 'var(--ss-border-h)'}`,
+        borderRadius: 4,
+        padding: '18px 20px',
+        cursor: 'pointer',
+        boxShadow: isSelected
+          ? `inset 0 0 0 1px ${meta.accent}, 0 6px 18px rgba(120,70,40,0.08)`
+          : undefined,
+      }}
+    >
+      {/* Hairline corner brackets when selected */}
+      {isSelected &&
+        (['tl', 'tr', 'bl', 'br'] as const).map((c) => (
+          <span
+            key={c}
+            className="absolute pointer-events-none"
+            style={{
+              width: 10,
+              height: 10,
+              borderTop: c.includes('t') ? `2px solid ${meta.accent}` : 'none',
+              borderBottom: c.includes('b') ? `2px solid ${meta.accent}` : 'none',
+              borderLeft: c.includes('l') ? `2px solid ${meta.accent}` : 'none',
+              borderRight: c.includes('r') ? `2px solid ${meta.accent}` : 'none',
+              top: c.includes('t') ? -1 : 'auto',
+              bottom: c.includes('b') ? -1 : 'auto',
+              left: c.includes('l') ? -1 : 'auto',
+              right: c.includes('r') ? -1 : 'auto',
+            }}
+          />
+        ))}
+
+      {/* Top row — stage stamp + price */}
+      <div className="flex items-start justify-between gap-4 mb-3">
+        <div
+          className="flex items-center gap-2 ss-mono text-[10px] uppercase flex-wrap"
+          style={{ letterSpacing: '0.18em' }}
+        >
+          <span
+            style={{
+              background: meta.accent,
+              color: 'var(--ss-ink)',
+              padding: '3px 7px',
+              borderRadius: 2,
+              fontWeight: 800,
+            }}
+          >
+            {meta.num}
+          </span>
+          <span style={{ color: meta.accent, fontWeight: 700 }}>
+            {meta.label.toUpperCase()}
+          </span>
+          {isPopular && (
+            <span
+              className="inline-flex items-center gap-1 px-1.5 py-0.5"
+              style={{
+                background: 'var(--ss-s1)',
+                border: `1px solid ${meta.accent}`,
+                borderRadius: 2,
+                color: meta.accent,
+              }}
+            >
+              ★ Most popular
+            </span>
+          )}
+          {isSelected && (
+            <span
+              className="inline-flex items-center gap-1 ml-0.5"
+              style={{ color: meta.accent }}
+            >
+              <Check className="h-3 w-3" /> Selected
+            </span>
+          )}
         </div>
+        <div className="text-right shrink-0">
+          <div
+            className="ss-heading font-extrabold leading-none"
+            style={{ fontSize: 26, color: 'var(--ss-t1)' }}
+          >
+            {formatGbp(preset.totalPounds)}
+          </div>
+          <div
+            className="ss-mono text-[10px] uppercase mt-1.5"
+            style={{ letterSpacing: '0.14em', color: 'var(--ss-t4)' }}
+          >
+            {preset.panelCount} pnl · {preset.kwp.toFixed(2)} kWp · 0% VAT
+          </div>
+        </div>
+      </div>
+
+      {/* Tagline */}
+      <p className="text-[14px] mb-3" style={{ color: 'var(--ss-t3)' }}>
+        {meta.tagline}
+      </p>
+
+      {/* Inclusions — compact 2-col with terracotta dots */}
+      <ul className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1.5 text-[13px]">
+        {visibleInclusions.map((line) => (
+          <li key={line} className="flex items-start gap-2">
+            <span
+              className="w-1 h-1 rounded-full mt-2 flex-shrink-0"
+              style={{ background: meta.accent }}
+            />
+            <span style={{ color: 'var(--ss-t2)' }}>{line}</span>
+          </li>
+        ))}
+      </ul>
+
+      {extra > 0 && (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation()
+            setExpanded((v) => !v)
+          }}
+          aria-expanded={expanded}
+          className="ss-mono text-[10px] uppercase mt-3 inline-flex items-center gap-1.5 transition-colors group"
+          style={{
+            letterSpacing: '0.2em',
+            color: expanded ? meta.accent : 'var(--ss-t3)',
+            background: 'transparent',
+            border: 'none',
+            padding: '2px 0',
+            cursor: 'pointer',
+          }}
+        >
+          <span
+            aria-hidden
+            className="inline-flex items-center justify-center"
+            style={{
+              width: 14,
+              height: 14,
+              border: `1px solid ${expanded ? meta.accent : 'var(--ss-border-h)'}`,
+              borderRadius: 2,
+              fontSize: 11,
+              fontWeight: 800,
+              lineHeight: 1,
+              transition: 'transform 220ms ease, border-color 200ms ease, color 200ms ease',
+              transform: expanded ? 'rotate(45deg)' : 'rotate(0deg)',
+              color: expanded ? meta.accent : 'var(--ss-t3)',
+            }}
+          >
+            +
+          </span>
+          <span className="group-hover:underline underline-offset-4">
+            {expanded ? 'Show fewer' : `${extra} more inclusion${extra === 1 ? '' : 's'}`}
+          </span>
+        </button>
       )}
     </div>
   )

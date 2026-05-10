@@ -146,7 +146,7 @@ export function SystemConfigurator({
       if (!res.ok) throw new Error(data.error ?? 'Save failed')
       setQuote(data.quote)
       setSavedAt(new Date())
-      toast.success('Saved — quote PDF regenerated')
+      toast.success('Saved. Quote PDF regenerated.')
       router.refresh()
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Save failed')
@@ -371,7 +371,7 @@ export function SystemConfigurator({
                       <SelectItem value="NONE">No battery</SelectItem>
                       {batteries.map((b) => (
                         <SelectItem key={b.sku} value={b.sku}>
-                          {b.modelName} — {b.baseCapacityKwh} kWh ({formatGbp(b.priceWithSolar)})
+                          {b.modelName} · {b.baseCapacityKwh} kWh ({formatGbp(b.priceWithSolar)})
                         </SelectItem>
                       ))}
                     </SelectContent>

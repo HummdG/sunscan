@@ -120,7 +120,7 @@ export function BillUpload({ value, onChange }: BillUploadProps) {
         <div className="flex items-start gap-2 p-3 rounded-lg bg-amber-50 border border-amber-200">
           <AlertCircle className="h-4 w-4 text-amber-600 mt-0.5 shrink-0" />
           <div className="text-sm text-amber-800">
-            <span className="font-medium">Values extracted by OCR — please verify.</span>
+            <span className="font-medium">Values extracted by OCR. Please verify.</span>
             <span className="ml-1">Confidence: {value.ocrConfidence}. Edit any field below if incorrect.</span>
           </div>
         </div>

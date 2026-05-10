@@ -1,11 +1,13 @@
 import React from 'react'
 import { Svg, G, Rect, Path, Line, Polyline, Text as SvgText } from '@react-pdf/renderer'
 
-const NAVY = '#1E3A5F'
-const GOLD = '#F59E0B'
-const GREEN = '#10B981'
-const MUTED = '#94A3B8'
-const GRID = '#E2E8F0'
+// Cream palette — matches PDF ReportDocument and the web design tokens.
+const NAVY  = '#B04020' // terracotta brand (kept name for diff minimalism)
+const GOLD  = '#D97706' // deep amber accent
+const GREEN = '#5A7842' // olive — environmental
+const MUTED = '#B19068' // sun-faded ochre — axis text & inactive segments
+const GRID  = '#DECB99' // warm divider — chart grid lines
+const TEXT  = '#5C3A24' // coffee — primary chart text
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 
@@ -122,11 +124,11 @@ export function PdfSelfConsumptionDonut({ selfKwh, exportKwh }: { selfKwh: numbe
       <T x={cx} y={cy + 9} fontSize={7} fill={MUTED} textAnchor="middle">self-used</T>
 
       <Rect x={legX} y={legY} width={9} height={9} fill={GREEN} rx={2} />
-      <T x={legX + 13} y={legY + 8} fontSize={8} fill="#334155">Self-consumed</T>
+      <T x={legX + 13} y={legY + 8} fontSize={8} fill={TEXT}>Self-consumed</T>
       <T x={legX + 13} y={legY + 19} fontSize={8} fill={MUTED}>{selfKwh.toLocaleString()} kWh</T>
 
       <Rect x={legX} y={legY + 32} width={9} height={9} fill={MUTED} rx={2} />
-      <T x={legX + 13} y={legY + 40} fontSize={8} fill="#334155">Exported to grid</T>
+      <T x={legX + 13} y={legY + 40} fontSize={8} fill={TEXT}>Exported to grid</T>
       <T x={legX + 13} y={legY + 51} fontSize={8} fill={MUTED}>{exportKwh.toLocaleString()} kWh</T>
     </Svg>
   )
@@ -222,7 +224,7 @@ export function PdfBillSavingsChart({ before, after }: { before: number; after: 
               {b.label}
             </T>
             <Rect x={padL} y={b.y} width={bW} height={barH} fill={b.fill} rx={3} />
-            <T x={padL + bW + 6} y={b.y + barH - 7} fontSize={9} fontFamily="Helvetica-Bold" fill="#1E293B">
+            <T x={padL + bW + 6} y={b.y + barH - 7} fontSize={9} fontFamily="Helvetica-Bold" fill={TEXT}>
               £{Math.round(b.val).toLocaleString()}
             </T>
           </G>
