@@ -17,17 +17,10 @@ import type {
   GoogleSolarRoofSegment,
   OsBuilding,
 } from '@/lib/types'
-import { SolarModelViewer } from '@/components/solar/SolarModelViewer'
-import { HouseBaseExtruded } from '@/components/solar/HouseBase'
-import { RoofFromFootprintMesh } from '@/components/solar/RoofFromFootprintMesh'
+import { SolarPanelMesh } from '@/components/solar/SolarPanelMesh'
 import { buildSolar3DModel, DEFAULT_WALL_HEIGHT_M } from '@/lib/solar/solarApiMapper'
-import { computePanelLayouts, computePanelLayoutsForHouseModel } from '@/lib/solar/panelPlacementService'
-import { clipRoofPlanesToFootprint, matchAndEnrich, clipRoofPlanes } from '@/lib/solar/solarApiMatcher'
-import { buildRoofFromFootprint } from '@/lib/solar/roofMeshBuilder'
-import { buildPanelAnchoredRoof } from '@/lib/solar/panelAnchoredRoofBuilder'
-import type { PanelLayout, HouseModel, EnrichedRoofPlane, Solar3DModel, LocalRoofSegment } from '@/types/solar'
-import { processLidar } from '@/lib/solar/lidarProcessor'
-import { segmentRoofPlanes } from '@/lib/solar/roofSegmentation'
+import { computePanelLayouts } from '@/lib/solar/panelPlacementService'
+import type { PanelLayout, Solar3DModel } from '@/types/solar'
 
 // ─── Geometry helpers ─────────────────────────────────────────────────────────
 
@@ -106,24 +99,6 @@ function makeQuadGeo(
   return geo
 }
 
-function makeEdgesFromQuad(
-  a: [number, number, number],
-  b: [number, number, number],
-  c: [number, number, number],
-  d: [number, number, number],
-): THREE.BufferGeometry {
-  const verts = new Float32Array([
-    ...a, ...b,
-    ...b, ...c,
-    ...c, ...d,
-    ...d, ...a,
-    ...a, ...c,  // diagonal ridge line
-  ])
-  const geo = new THREE.BufferGeometry()
-  geo.setAttribute('position', new THREE.BufferAttribute(verts, 3))
-  return geo
-}
-
 function azimuthLabel(deg: number): string {
   const dirs = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW', 'N']
   return dirs[Math.round(((deg % 360) + 360) % 360 / 45)]
@@ -145,46 +120,6 @@ function heatmapColor(value: number, min: number, max: number): string {
 
 function azimuthToMcsOrientation(az: number): number {
   return Math.abs(az - 180)
-}
-
-// ─── LiDAR → LocalRoofSegment adapter ────────────────────────────────────────
-
-function lidarPlanesToLocalSegments(planes: EnrichedRoofPlane[]): LocalRoofSegment[] {
-  return planes.map((plane, i) => {
-    const ring: [number, number][] = plane.polygon.length > 1 &&
-      plane.polygon[0][0] === plane.polygon[plane.polygon.length - 1][0] &&
-      plane.polygon[0][1] === plane.polygon[plane.polygon.length - 1][1]
-      ? plane.polygon.slice(0, -1) as [number, number][]
-      : plane.polygon as [number, number][]
-
-    const cx = plane.refX
-    const cz = plane.refZ
-
-    const azRad = (plane.azimuthDegrees * Math.PI) / 180
-    const ridgeX = Math.cos(azRad), ridgeZ = Math.sin(azRad)
-    const faceX  = Math.sin(azRad), faceZ  = -Math.cos(azRad)
-
-    let minR = Infinity, maxR = -Infinity
-    let minF = Infinity, maxF = -Infinity
-    for (const [x, z] of ring) {
-      const r = (x - cx) * ridgeX + (z - cz) * ridgeZ
-      const f = (x - cx) * faceX  + (z - cz) * faceZ
-      if (r < minR) minR = r; if (r > maxR) maxR = r
-      if (f < minF) minF = f; if (f > maxF) maxF = f
-    }
-
-    return {
-      segmentIndex:     plane.solarSegmentIndex ?? i,
-      azimuthDeg:       plane.azimuthDegrees,
-      pitchDeg:         plane.pitchDegrees,
-      heightAtCenterM:  plane.heightM,
-      center:           { x: cx, z: cz },
-      ridgeLenM:        Math.max(maxR - minR, 1),
-      groundDepthM:     Math.max(maxF - minF, 1),
-      areaM2:           plane.areaM2,
-      sunshineQuantiles: plane.sunshineQuantiles ?? [],
-    }
-  })
 }
 
 // ─── DSM elevation data ───────────────────────────────────────────────────────
@@ -231,199 +166,6 @@ function useDsm(dsmId: string | undefined): { dsm: DsmData | null; loading: bool
   }, [dsmId])
 
   return state
-}
-
-// ─── LiDAR hook ───────────────────────────────────────────────────────────────
-
-interface LidarResult {
-  planes: EnrichedRoofPlane[]
-  loading: boolean
-  source: 'lidar+os+solar' | 'lidar+solar' | null
-  reason?: 'no_coverage' | 'no_planes' | 'error'
-}
-
-function useLidar(
-  lat: number,
-  lng: number,
-  solar3DModel: Solar3DModel,
-  osBuilding: OsBuilding | null,
-): LidarResult {
-  const [state, setState] = useState<LidarResult>({ planes: [], loading: false, source: null })
-
-  useEffect(() => {
-    setState(s => ({ ...s, loading: true }))
-    ;(async () => {
-      try {
-        const res = await fetch('/api/lidar', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ lat, lng }),
-        })
-        if (!res.ok) throw new Error(`HTTP ${res.status}`)
-        const data = await res.json()
-        if (!data.available) { setState({ planes: [], loading: false, source: null, reason: 'no_coverage' }); return }
-
-        const footprint = osBuilding?.footprintPolygon ?? null
-        const grid = processLidar(data.dsmValues, data.dtmValues, data.width, data.height, data.bboxBng, data.cellSizeM, footprint)
-        const rawPlanes = segmentRoofPlanes(grid, [lng, lat])
-
-        if (rawPlanes.length < 1) { setState({ planes: [], loading: false, source: null, reason: 'no_planes' }); return }
-
-        const enriched = matchAndEnrich(rawPlanes, solar3DModel.segments)
-
-        const source: LidarResult['source'] = footprint ? 'lidar+os+solar' : 'lidar+solar'
-        setState({ planes: enriched, loading: false, source, reason: undefined })
-      } catch (e) {
-        console.error('useLidar:', e)
-        setState({ planes: [], loading: false, source: null, reason: 'error' })
-      }
-    })()
-  }, [lat, lng, solar3DModel, osBuilding])
-
-  return state
-}
-
-// ─── 3D roof segment ──────────────────────────────────────────────────────────
-
-function RoofSegmentMesh({
-  geo: g,
-  color,
-  showLabel,
-}: {
-  geo: SegmentGeo
-  color: string
-  showLabel: boolean
-}) {
-  const mesh = makeQuadGeo(...g.corners)
-  const edges = makeEdgesFromQuad(...g.corners)
-
-  return (
-    <group>
-      <mesh geometry={mesh} castShadow receiveShadow>
-        <meshStandardMaterial color={color} roughness={0.7} metalness={0.05} side={THREE.DoubleSide} />
-      </mesh>
-      <lineSegments geometry={edges}>
-        <lineBasicMaterial color="#1e293b" linewidth={1} opacity={0.5} transparent />
-      </lineSegments>
-      {showLabel && (
-        <Html
-          position={g.center}
-          center
-          distanceFactor={12}
-          style={{ pointerEvents: 'none' }}
-        >
-          <div className="bg-white/90 border border-slate-200 rounded px-1.5 py-1 text-[10px] leading-tight shadow-md whitespace-nowrap">
-            <div className="font-semibold text-slate-800">{azimuthLabel(g.segment.azimuthDegrees)} · {Math.round(g.segment.pitchDegrees)}°</div>
-            <div className="text-slate-500">{Math.round(g.segment.stats.areaMeters2)} m²</div>
-            <div className="text-amber-600">{Math.round(sunshineP50(g.segment)).toLocaleString()} hrs/yr</div>
-          </div>
-        </Html>
-      )}
-    </group>
-  )
-}
-
-// ─── Building walls ───────────────────────────────────────────────────────────
-
-function BuildingWalls({
-  insights,
-  minEaveHeight,
-}: {
-  insights: GoogleSolarBuildingInsights
-  minEaveHeight: number
-}) {
-  const center = insights.center
-  const [[swX, swZ]] = wgs84ToLocalMetres(
-    [[insights.boundingBox.sw.longitude, insights.boundingBox.sw.latitude]],
-    [center.longitude, center.latitude],
-  )
-  const [[neX, neZ]] = wgs84ToLocalMetres(
-    [[insights.boundingBox.ne.longitude, insights.boundingBox.ne.latitude]],
-    [center.longitude, center.latitude],
-  )
-
-  const wallW = Math.abs(neX - swX)
-  const wallD = Math.abs(swZ - neZ)
-  const wallH = Math.max(minEaveHeight, 2.5)
-  const cx = (swX + neX) / 2
-  const cz = (swZ + neZ) / 2
-
-  return (
-    <mesh position={[cx, wallH / 2, cz]} castShadow receiveShadow>
-      <boxGeometry args={[wallW, wallH, wallD]} />
-      <meshStandardMaterial color="#E8E4DC" roughness={0.8} />
-    </mesh>
-  )
-}
-
-// ─── Solar panels ─────────────────────────────────────────────────────────────
-
-function PanelGrid({
-  geos,
-  panelW,
-  panelH,
-  configSummaries,
-}: {
-  geos: SegmentGeo[]
-  panelW: number
-  panelH: number
-  configSummaries: Array<{ segmentIndex: number; panelsCount: number }>
-}) {
-  const GAP = 0.02
-  const MARGIN = 0.3
-  const panels: React.ReactElement[] = []
-
-  for (const summary of configSummaries) {
-    const geo = geos[summary.segmentIndex]
-    if (!geo) continue
-
-    const ridgeDir: [number, number] = [
-      Math.cos((geo.segment.azimuthDegrees * Math.PI) / 180),
-      Math.sin((geo.segment.azimuthDegrees * Math.PI) / 180),
-    ]
-    const faceDir: [number, number] = [
-      Math.sin((geo.segment.azimuthDegrees * Math.PI) / 180),
-      -Math.cos((geo.segment.azimuthDegrees * Math.PI) / 180),
-    ]
-    const pitchRad = (geo.segment.pitchDegrees * Math.PI) / 180
-
-    const usableRidge = Math.max(0, geo.ridgeLength - 2 * MARGIN)
-    const usableSlope = Math.max(0, (geo.groundDepth / Math.cos(pitchRad)) - 2 * MARGIN)
-
-    const cols = Math.max(0, Math.floor((usableRidge + GAP) / (panelW + GAP)))
-    const rows = Math.max(0, Math.floor((usableSlope + GAP) / (panelH + GAP)))
-
-    const startRidge = -(cols * (panelW + GAP) - GAP) / 2 + panelW / 2
-
-    for (let row = 0; row < rows && panels.length < summary.panelsCount; row++) {
-      for (let col = 0; col < cols && panels.length < summary.panelsCount; col++) {
-        const along = startRidge + col * (panelW + GAP)
-        const slopeD = MARGIN + row * (panelH + GAP) + panelH / 2
-        const groundD = slopeD * Math.cos(pitchRad)
-        const riseD   = slopeD * Math.sin(pitchRad)
-
-        // Position from eave edge
-        const baseX = geo.corners[0][0] + geo.corners[1][0]
-        const baseZ = geo.corners[0][2] + geo.corners[1][2]
-        const px = (baseX / 2)
-          + along * ridgeDir[0]
-          - faceDir[0] * groundD
-        const py = geo.eaveHeight + riseD + 0.05
-        const pz = (baseZ / 2)
-          + along * ridgeDir[1]
-          - faceDir[1] * groundD
-
-        panels.push(
-          <mesh key={`${summary.segmentIndex}-${row}-${col}`} position={[px, py, pz]} castShadow>
-            <boxGeometry args={[panelW, 0.03, panelH]} />
-            <meshStandardMaterial color="#1a1a3e" roughness={0.4} metalness={0.2} />
-          </mesh>,
-        )
-      }
-    }
-  }
-
-  return <group>{panels}</group>
 }
 
 // ─── Ground plane ─────────────────────────────────────────────────────────────
@@ -585,8 +327,6 @@ function SegmentLabel({ geo: g }: { geo: SegmentGeo }) {
 
 // ─── Scene ────────────────────────────────────────────────────────────────────
 
-type ViewSource = 'lidar' | 'solar' | 'os_ngd'
-
 interface SceneProps {
   insights: GoogleSolarBuildingInsights
   mode: 'model' | 'heatmap' | 'panels'
@@ -596,15 +336,10 @@ interface SceneProps {
   lat: number
   lng: number
   mapsKey: string | undefined
-  osBuilding: OsBuilding | null
   solar3DModel: Solar3DModel
-  lidarPlanes: EnrichedRoofPlane[]
-  lidarSource: 'lidar+os+solar' | 'lidar+solar' | null
-  viewSource: ViewSource
-  pitchDeg: number
 }
 
-function Scene({ insights, mode, captureRef, showLabels, dsm, lat, lng, mapsKey, osBuilding, solar3DModel, lidarPlanes, lidarSource, viewSource, pitchDeg }: SceneProps) {
+function Scene({ insights, mode, captureRef, showLabels, dsm, lat, lng, mapsKey, solar3DModel }: SceneProps) {
   const { gl, scene, camera } = useThree()
 
   useEffect(() => {
@@ -617,121 +352,19 @@ function Scene({ insights, mode, captureRef, showLabels, dsm, lat, lng, mapsKey,
   const sp = insights.solarPotential
   const segs = sp.roofSegmentStats ?? []
   const geos = segs.map(s => computeSegmentGeo(s, insights.center))
-  const minEave = geos.length
-    ? Math.min(...geos.map(g => g.eaveHeight))
-    : 3
 
   const sunshineValues = segs.map(s => sunshineP50(s))
-  const sunMin = Math.min(...sunshineValues)
-  const sunMax = Math.max(...sunshineValues)
+  const sunMin = sunshineValues.length ? Math.min(...sunshineValues) : 0
+  const sunMax = sunshineValues.length ? Math.max(...sunshineValues) : 1
 
   // Select last config for panels view (max recommended)
   const configs = sp.solarPanelConfigs ?? []
   const panelConfig = configs[configs.length - 1]
 
-  // Shared geometry inputs
-  const wallH = osBuilding?.eaveHeightM ?? DEFAULT_WALL_HEIGHT_M
-  const footprintLocal = useMemo<[number, number][]>(() =>
-    osBuilding
-      ? wgs84ToLocalMetres(osBuilding.footprintPolygon, [insights.center.longitude, insights.center.latitude])
-      : [],
-    [osBuilding, insights.center.longitude, insights.center.latitude],
-  )
-
-  // Dominant pitch from Google Solar: largest-area segment wins
-  const solarPitchDeg = solar3DModel.segments.length > 0
-    ? solar3DModel.segments.reduce((best, s) => s.areaM2 > best.areaM2 ? s : best).pitchDeg
-    : pitchDeg
-
-  const lidarHouseModel = useMemo<HouseModel | null>(() => {
-    if (lidarPlanes.length < 1 || footprintLocal.length < 3) return null
-
-    // Height anchoring: find lowest eave vertex across all OBR polygons.
-    // getY(v) = heightM - faceProj * tan(pitch); eave = vertex with max faceProj.
-    const eaveHeights = lidarPlanes.map(p => {
-      const azRad = (p.azimuthDegrees * Math.PI) / 180
-      const faceX = Math.sin(azRad), faceZ = -Math.cos(azRad)
-      const pitchRad = (p.pitchDegrees * Math.PI) / 180
-      const ring: [number, number][] = (
-        p.polygon.length > 1 &&
-        p.polygon[0][0] === p.polygon[p.polygon.length - 1][0] &&
-        p.polygon[0][1] === p.polygon[p.polygon.length - 1][1]
-      ) ? p.polygon.slice(0, -1) as [number, number][]
-        : p.polygon as [number, number][]
-      const maxFaceProj = Math.max(...ring.map(([vx, vz]) =>
-        (vx - p.refX) * faceX + (vz - p.refZ) * faceZ
-      ))
-      return p.heightM - maxFaceProj * Math.tan(pitchRad)
-    })
-    const minEave = Math.min(...eaveHeights)
-    const hOff = Number.isFinite(minEave) ? wallH - minEave : 0
-    const anchored = hOff !== 0
-      ? lidarPlanes.map(p => ({ ...p, heightM: p.heightM + hOff }))
-      : lidarPlanes
-
-    // Clip inter-plane ridge overlaps, then clip to building footprint
-    const ridgeClipped = clipRoofPlanes(anchored)
-    const roofPlanes = clipRoofPlanesToFootprint(ridgeClipped, footprintLocal)
-    if (roofPlanes.length === 0) return null
-    return { footprintLocal, wallHeightM: wallH, roofPlanes, source: lidarSource ?? 'lidar+solar' }
-  }, [lidarPlanes, lidarSource, footprintLocal, wallH])
-
-  // Tier 1: panel-anchored OBRs (true roof geometry from detected panel positions),
-  // with bbox/Voronoi fallbacks per segment inside the builder. Tier 2: pure Voronoi.
-  // Aligns the OS footprint to the Google Solar building centroid so the walls
-  // sit directly under the satellite-detected roof (the two data sources can be
-  // off by a few metres for the same building due to mapping registration).
-  const solarHouseModel = useMemo<HouseModel | null>(() => {
-    if (!osBuilding || solar3DModel.segments.length === 0 || footprintLocal.length < 3) return null
-
-    // Google Solar building centroid = mean of segment centres in local metres.
-    const segs = solar3DModel.segments
-    const segCx = segs.reduce((s, g) => s + g.center.x, 0) / segs.length
-    const segCz = segs.reduce((s, g) => s + g.center.z, 0) / segs.length
-
-    // OS footprint centroid (drop the closing duplicate vertex if present).
-    const ring: [number, number][] = (
-      footprintLocal.length > 1 &&
-      footprintLocal[0][0] === footprintLocal[footprintLocal.length - 1][0] &&
-      footprintLocal[0][1] === footprintLocal[footprintLocal.length - 1][1]
-    ) ? footprintLocal.slice(0, -1) as [number, number][]
-      : footprintLocal
-    const fpCx = ring.reduce((s, p) => s + p[0], 0) / ring.length
-    const fpCz = ring.reduce((s, p) => s + p[1], 0) / ring.length
-
-    const dx = segCx - fpCx
-    const dz = segCz - fpCz
-    const alignedFootprint: [number, number][] = (Math.hypot(dx, dz) > 0.5)
-      ? footprintLocal.map(([x, z]) => [x + dx, z + dz] as [number, number])
-      : footprintLocal
-
-    let roofPlanes = buildPanelAnchoredRoof(insights, alignedFootprint, wallH)
-    if (roofPlanes.length === 0) {
-      roofPlanes = buildRoofFromFootprint(solar3DModel.segments, alignedFootprint, wallH)
-    }
-    if (roofPlanes.length === 0) return null
-    return { footprintLocal: alignedFootprint, wallHeightM: wallH, roofPlanes, source: 'os+solar' }
-  }, [insights, osBuilding, solar3DModel, footprintLocal, wallH])
-
-  const activeHouseModel = viewSource === 'lidar' ? lidarHouseModel : null
-
   const panelLayouts: PanelLayout[] = useMemo(() => {
-    if (mode !== 'panels' || viewSource === 'os_ngd') return []
-    if (viewSource === 'lidar' && activeHouseModel) {
-      const totalCount = panelConfig?.roofSegmentSummaries.reduce((s, r) => s + r.panelsCount, 0) ?? 0
-      return totalCount > 0
-        ? computePanelLayoutsForHouseModel(activeHouseModel, totalCount, sp.panelWidthMeters, sp.panelHeightMeters)
-        : []
-    }
-    if (viewSource === 'solar' && solarHouseModel) {
-      const totalCount = panelConfig?.roofSegmentSummaries.reduce((s, r) => s + r.panelsCount, 0) ?? 0
-      return totalCount > 0
-        ? computePanelLayoutsForHouseModel(solarHouseModel, totalCount, sp.panelWidthMeters, sp.panelHeightMeters)
-        : []
-    }
-    if (!panelConfig) return []
+    if (mode !== 'panels' || !panelConfig) return []
     return computePanelLayouts(solar3DModel, panelConfig, sp.panelWidthMeters, sp.panelHeightMeters)
-  }, [activeHouseModel, solarHouseModel, solar3DModel, panelConfig, mode, viewSource, sp.panelWidthMeters, sp.panelHeightMeters])
+  }, [solar3DModel, panelConfig, mode, sp.panelWidthMeters, sp.panelHeightMeters])
 
   // Primary 3D source = Google Photorealistic 3D Tiles. We only fall back to the
   // Google Solar DSM heightmap when the tiles API key is missing or DSM is the
@@ -750,8 +383,6 @@ function Scene({ insights, mode, captureRef, showLabels, dsm, lat, lng, mapsKey,
   const minSegEave = geos.length ? Math.min(...geos.map(g => g.eaveHeight)) : 0
   const groundAlt = (dsm?.minElev ?? Math.max(0, minSegEave - 3)) + GEOID_UK
 
-  void sunMin; void sunMax; void minEave
-
   return (
     <>
       <ambientLight intensity={0.6} />
@@ -764,85 +395,52 @@ function Scene({ insights, mode, captureRef, showLabels, dsm, lat, lng, mapsKey,
       />
       <directionalLight position={[-5, 10, -8]} intensity={0.3} />
 
-      {!useGoogleTiles && <Ground />}
+      {!useGoogleTiles && !useDsmMesh && <Ground />}
 
-      {useGoogleTiles ? (
-        <>
-          <GoogleTilesScene
-            lat={lat}
-            lng={lng}
-            groundAlt={groundAlt}
-            apiKey={mapsKey!}
-            onUnavailable={handleTilesUnavailable}
-          />
-          {showLabels && geos.map((g, i) => <SegmentLabel key={i} geo={g} />)}
-          {mode === 'panels' && panelConfig && (
-            <PanelGrid
-              geos={geos}
-              panelW={sp.panelWidthMeters}
-              panelH={sp.panelHeightMeters}
-              configSummaries={panelConfig.roofSegmentSummaries}
-            />
-          )}
-        </>
-      ) : useDsmMesh ? (
-        <>
-          <DsmMesh dsm={dsm!} buildingCenter={insights.center} />
-          {showLabels && geos.map((g, i) => <SegmentLabel key={i} geo={g} />)}
-        </>
-      ) : viewSource === 'os_ngd' && osBuilding && footprintLocal.length >= 3 ? (
-        <>
-          <HouseBaseExtruded footprintLocal={footprintLocal} wallHeightM={wallH} />
-          <RoofFromFootprintMesh
-            footprintLocal={footprintLocal}
-            wallHeightM={wallH}
-            ridgeHeightM={osBuilding.ridgeHeightM}
-            pitchDeg={pitchDeg}
-          />
-        </>
-      ) : viewSource === 'solar' ? (
-        solarHouseModel ? (
-          <SolarModelViewer
-            houseModel={solarHouseModel}
-            mode={mode}
-            panelLayouts={panelLayouts}
-            panelWidthM={sp.panelWidthMeters}
-            panelHeightM={sp.panelHeightMeters}
-            showLabels={showLabels}
-          />
-        ) : (
-          <SolarModelViewer
-            model={solar3DModel}
-            footprintLocal={footprintLocal.length >= 3 ? footprintLocal : undefined}
-            wallHeightM={wallH}
-            mode={mode}
-            panelLayouts={panelLayouts}
-            panelWidthM={sp.panelWidthMeters}
-            panelHeightM={sp.panelHeightMeters}
-            showLabels={showLabels}
-          />
-        )
-      ) : activeHouseModel ? (
-        <SolarModelViewer
-          houseModel={activeHouseModel}
-          mode={mode}
-          panelLayouts={panelLayouts}
-          panelWidthM={sp.panelWidthMeters}
-          panelHeightM={sp.panelHeightMeters}
-          showLabels={showLabels}
-        />
-      ) : (
-        <SolarModelViewer
-          model={solar3DModel}
-          footprintLocal={footprintLocal.length >= 3 ? footprintLocal : undefined}
-          wallHeightM={wallH}
-          mode={mode}
-          panelLayouts={panelLayouts}
-          panelWidthM={sp.panelWidthMeters}
-          panelHeightM={sp.panelHeightMeters}
-          showLabels={showLabels}
+      {useGoogleTiles && (
+        <GoogleTilesScene
+          lat={lat}
+          lng={lng}
+          groundAlt={groundAlt}
+          apiKey={mapsKey!}
+          onUnavailable={handleTilesUnavailable}
         />
       )}
+
+      {useDsmMesh && dsm && (
+        <DsmMesh dsm={dsm} buildingCenter={insights.center} />
+      )}
+
+      {/* Translucent solar segment overlay — heatmap mode always; model mode
+          only when no tiles are present (tiles already show roof colours). */}
+      {(mode === 'heatmap' || (!useGoogleTiles && mode === 'model')) &&
+        geos.map((g, i) => (
+          <mesh key={i} geometry={makeQuadGeo(...g.corners)}>
+            <meshStandardMaterial
+              color={
+                mode === 'heatmap'
+                  ? heatmapColor(sunshineP50(g.segment), sunMin, sunMax)
+                  : (azimuthToMcsOrientation(g.segment.azimuthDegrees) < 45 ? '#D97706' : '#94A3B8')
+              }
+              opacity={useGoogleTiles ? 0.55 : 1}
+              transparent={useGoogleTiles}
+              side={THREE.DoubleSide}
+            />
+          </mesh>
+        ))
+      }
+
+      {/* Panel overlay — flat panels on each roof plane in panels mode. */}
+      {mode === 'panels' && panelLayouts.map((layout, i) => (
+        <SolarPanelMesh
+          key={i}
+          layout={layout}
+          panelWidthM={sp.panelWidthMeters}
+          panelHeightM={sp.panelHeightMeters}
+        />
+      ))}
+
+      {showLabels && geos.map((g, i) => <SegmentLabel key={`label-${i}`} geo={g} />)}
 
       <OrbitControls
         enableDamping
@@ -1229,7 +827,6 @@ type ViewTab = '3d' | 'heatmap' | 'panels' | 'satellite' | 'geotiff'
 
 export function SolarRoofViewer({ insights, dataLayers, lat, lng, osBuilding, onCapture }: SolarRoofViewerProps) {
   const [tab, setTab] = useState<ViewTab>('3d')
-  const [viewSource, setViewSource] = useState<ViewSource>('solar')
   const [showLabels, setShowLabels] = useState(true)
   const captureRef = useRef<(() => string) | null>(null)
   const mapsKey = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY
@@ -1238,9 +835,6 @@ export function SolarRoofViewer({ insights, dataLayers, lat, lng, osBuilding, on
   // Bug 2 fix: anchor roof heights to OS eave height rather than hardcoded 3.5m
   const wallH = osBuilding?.eaveHeightM ?? DEFAULT_WALL_HEIGHT_M
   const solar3DModel = useMemo(() => buildSolar3DModel(insights, wallH), [insights, wallH])
-  // Bug 1 fix: use Google Solar building centre (matches footprintLocal origin), not address lat/lng
-  const lidar = useLidar(insights.center.latitude, insights.center.longitude, solar3DModel, osBuilding ?? null)
-  const osNgdPitchDeg = osBuilding?.roofPitchDeg ?? 30
 
   const segs = insights.solarPotential.roofSegmentStats ?? []
   const geos = segs.map(s => computeSegmentGeo(s, insights.center))
@@ -1327,12 +921,7 @@ export function SolarRoofViewer({ insights, dataLayers, lat, lng, osBuilding, on
                 lat={lat}
                 lng={lng}
                 mapsKey={mapsKey}
-                osBuilding={osBuilding ?? null}
                 solar3DModel={solar3DModel}
-                lidarPlanes={lidar.planes}
-                lidarSource={lidar.source}
-                viewSource={viewSource}
-                pitchDeg={osNgdPitchDeg}
               />
             </Canvas>
           </Suspense>
@@ -1347,35 +936,6 @@ export function SolarRoofViewer({ insights, dataLayers, lat, lng, osBuilding, on
           <div className="absolute top-3 left-3 text-xs text-white/80 bg-black/25 rounded px-2 py-0.5">
             Drag to rotate · Scroll to zoom
           </div>
-
-          {/* Data source selector — legacy fallback only when Photorealistic
-              Tiles isn't available. With tiles active, the tiles themselves
-              are the source, so the user has nothing to switch between. */}
-          {!mapsKey && (
-            <div className="absolute top-10 left-3 flex gap-1">
-              {(['lidar', 'solar', 'os_ngd'] as ViewSource[]).map(src => {
-                const label = src === 'lidar' ? 'LiDAR' : src === 'solar' ? 'Solar' : 'OS NGD'
-                const available = src === 'lidar' ? lidar.planes.length >= 1
-                  : src === 'solar' ? solar3DModel.segments.length > 0
-                  : !!osBuilding
-                return (
-                  <button
-                    key={src}
-                    onClick={() => { if (available) setViewSource(src) }}
-                    className={`text-[10px] px-2 py-0.5 rounded border transition-colors ${
-                      viewSource === src
-                        ? 'bg-white text-slate-800 border-white font-semibold shadow'
-                        : !available
-                        ? 'bg-black/10 text-white/30 border-white/15 cursor-not-allowed'
-                        : 'bg-black/25 text-white/75 border-white/30 hover:bg-black/35'
-                    }`}
-                  >
-                    {label}
-                  </button>
-                )
-              })}
-            </div>
-          )}
 
           <button
             onClick={() => setShowLabels(p => !p)}
@@ -1417,18 +977,8 @@ export function SolarRoofViewer({ insights, dataLayers, lat, lng, osBuilding, on
 
         {/* Source badge — always shown */}
         <div className="absolute bottom-3 right-3 flex items-center gap-1.5 bg-white/85 rounded-lg px-2 py-1 shadow-sm border border-white/60 text-xs text-slate-600">
-          {viewSource === 'lidar' ? (
-            lidar.loading
-              ? <span className="font-medium text-slate-400">LiDAR loading…</span>
-              : <span className="font-medium text-green-700">EA LiDAR 1m</span>
-          ) : viewSource === 'os_ngd' ? (
-            <span className="font-medium text-blue-700">OS NGD</span>
-          ) : (
-            <>
-              <span className="font-medium">Google Solar</span>
-              <QualityBadge quality={insights.imageryQuality} />
-            </>
-          )}
+          <span className="font-medium">Google Solar</span>
+          <QualityBadge quality={insights.imageryQuality} />
         </div>
       </div>
 
