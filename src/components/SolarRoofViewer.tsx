@@ -729,8 +729,11 @@ function Scene({ insights, mode, captureRef, showLabels, dsm, lat, lng, mapsKey,
     return computePanelLayouts(solar3DModel, panelConfig, sp.panelWidthMeters, sp.panelHeightMeters)
   }, [activeHouseModel, solarHouseModel, solar3DModel, panelConfig, mode, viewSource, sp.panelWidthMeters, sp.panelHeightMeters])
 
-  const useGoogleTiles = false
-  const useDsmMesh = false
+  // Primary 3D source = Google Photorealistic 3D Tiles. We only fall back to the
+  // Google Solar DSM heightmap when the tiles API key is missing or DSM is the
+  // only thing available for the address.
+  const useGoogleTiles = !!mapsKey
+  const useDsmMesh = !useGoogleTiles && !!dsm
 
   const GEOID_UK = 47
   const groundAlt = (dsm?.minElev ?? 0) + GEOID_UK
