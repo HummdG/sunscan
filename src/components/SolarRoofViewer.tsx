@@ -330,7 +330,7 @@ function SegmentLabel({ geo: g }: { geo: SegmentGeo }) {
 interface SceneProps {
   insights: GoogleSolarBuildingInsights
   mode: 'model' | 'heatmap' | 'panels'
-  captureRef: React.MutableRefObject<(() => string) | null>
+  captureRef: React.MutableRefObject<(() => Promise<string>) | null>
   showLabels: boolean
   dsm: DsmData | null
   lat: number
@@ -343,7 +343,9 @@ function Scene({ insights, mode, captureRef, showLabels, dsm, lat, lng, mapsKey,
   const { gl, scene, camera } = useThree()
 
   useEffect(() => {
-    captureRef.current = () => {
+    captureRef.current = async () => {
+      // Wait up to 800ms for any in-flight tile to land; otherwise capture now.
+      await new Promise((resolve) => setTimeout(resolve, useGoogleTiles ? 800 : 0))
       gl.render(scene, camera)
       return gl.domElement.toDataURL('image/png')
     }
@@ -828,7 +830,7 @@ type ViewTab = '3d' | 'heatmap' | 'panels' | 'satellite' | 'geotiff'
 export function SolarRoofViewer({ insights, dataLayers, lat, lng, osBuilding, onCapture }: SolarRoofViewerProps) {
   const [tab, setTab] = useState<ViewTab>('3d')
   const [showLabels, setShowLabels] = useState(true)
-  const captureRef = useRef<(() => string) | null>(null)
+  const captureRef = useRef<(() => Promise<string>) | null>(null)
   const mapsKey = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY
 
   const { dsm } = useDsm(dataLayers?.dsmId)
@@ -865,8 +867,8 @@ export function SolarRoofViewer({ insights, dataLayers, lat, lng, osBuilding, on
 
   const is3d = tab === '3d' || tab === 'heatmap' || tab === 'panels'
 
-  const handleCapture = () => {
-    if (captureRef.current) onCapture?.(captureRef.current())
+  const handleCapture = async () => {
+    if (captureRef.current) onCapture?.(await captureRef.current())
   }
 
   const hasLowQuality = insights.imageryQuality === 'LOW'
