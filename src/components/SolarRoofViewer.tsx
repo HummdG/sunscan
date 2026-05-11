@@ -447,11 +447,13 @@ function GoogleTilesScene({
   lng,
   groundAlt,
   apiKey,
+  onUnavailable,
 }: {
   lat: number
   lng: number
   groundAlt: number
   apiKey: string
+  onUnavailable?: () => void
 }) {
   const { camera, gl, scene } = useThree()
   const tilesRef = useRef<TilesRenderer | null>(null)
@@ -459,12 +461,8 @@ function GoogleTilesScene({
   useEffect(() => {
     const tiles = new TilesRenderer(TILES_ROOT)
     tiles.registerPlugin(new GoogleCloudAuthPlugin({ apiToken: apiKey, useRecommendedSettings: true }))
-
-    // Lower error target = more tile detail loaded for close-up building view
     tiles.errorTarget = 8
 
-    // Build oriented ENU frame at building centre (X=East, Y=Up, Z=South)
-    // then invert to get ECEF → local transform for the tiles group
     const frame = new THREE.Matrix4()
     WGS84_ELLIPSOID.getOrientedEastNorthUpFrame(
       lat * DEG2RAD,
@@ -477,6 +475,12 @@ function GoogleTilesScene({
     tiles.group.matrixAutoUpdate = false
     tiles.group.matrixWorldNeedsUpdate = true
 
+    let failedFetches = 0
+    tiles.addEventListener('tile-load-error', () => {
+      failedFetches += 1
+      if (failedFetches >= 3) onUnavailable?.()
+    })
+
     scene.add(tiles.group)
     tilesRef.current = tiles
 
@@ -485,7 +489,7 @@ function GoogleTilesScene({
       tiles.dispose()
       tilesRef.current = null
     }
-  }, [lat, lng, groundAlt, apiKey, scene])
+  }, [lat, lng, groundAlt, apiKey, scene, onUnavailable])
 
   useFrame(() => {
     const tiles = tilesRef.current
@@ -732,8 +736,9 @@ function Scene({ insights, mode, captureRef, showLabels, dsm, lat, lng, mapsKey,
   // Primary 3D source = Google Photorealistic 3D Tiles. We only fall back to the
   // Google Solar DSM heightmap when the tiles API key is missing or DSM is the
   // only thing available for the address.
-  const useGoogleTiles = !!mapsKey
-  const useDsmMesh = !useGoogleTiles && !!dsm
+  const [tilesAvailable, setTilesAvailable] = useState(true)
+  const useGoogleTiles = !!mapsKey && tilesAvailable
+  const useDsmMesh = (!useGoogleTiles && !!dsm) || (!tilesAvailable && !!dsm)
 
   const GEOID_UK = 47  // UK geoid offset (EGM2008 → WGS84 ellipsoid)
   // Anchor on Google Solar's reported eave heights when DSM isn't loaded
@@ -760,7 +765,13 @@ function Scene({ insights, mode, captureRef, showLabels, dsm, lat, lng, mapsKey,
 
       {useGoogleTiles ? (
         <>
-          <GoogleTilesScene lat={lat} lng={lng} groundAlt={groundAlt} apiKey={mapsKey!} />
+          <GoogleTilesScene
+            lat={lat}
+            lng={lng}
+            groundAlt={groundAlt}
+            apiKey={mapsKey!}
+            onUnavailable={() => setTilesAvailable(false)}
+          />
           {showLabels && geos.map((g, i) => <SegmentLabel key={i} geo={g} />)}
           {mode === 'panels' && panelConfig && (
             <PanelGrid
@@ -1381,6 +1392,10 @@ export function SolarRoofViewer({ insights, dataLayers, lat, lng, osBuilding, on
               Capture
             </Button>
           )}
+
+          <div className="absolute bottom-3 right-3 text-[10px] bg-black/40 text-white/85 rounded px-2 py-0.5">
+            {mapsKey ? 'Google 3D Tiles' : dataLayers?.dsmId ? 'Google Solar DSM' : 'Estimated geometry'}
+          </div>
         </div>
 
         {/* Satellite view */}
