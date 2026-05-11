@@ -342,6 +342,16 @@ interface SceneProps {
 function Scene({ insights, mode, captureRef, showLabels, dsm, lat, lng, mapsKey, solar3DModel }: SceneProps) {
   const { gl, scene, camera } = useThree()
 
+  // Primary 3D source = Google Photorealistic 3D Tiles. We only fall back to the
+  // Google Solar DSM heightmap when the tiles API key is missing or DSM is the
+  // only thing available for the address.
+  const [tilesAvailable, setTilesAvailable] = useState(true)
+  const handleTilesUnavailable = useCallback(() => {
+    setTilesAvailable(false)
+  }, [])
+  const useGoogleTiles = !!mapsKey && tilesAvailable
+  const useDsmMesh = (!useGoogleTiles && !!dsm) || (!tilesAvailable && !!dsm)
+
   useEffect(() => {
     captureRef.current = async () => {
       // Wait up to 800ms for any in-flight tile to land; otherwise capture now.
@@ -367,16 +377,6 @@ function Scene({ insights, mode, captureRef, showLabels, dsm, lat, lng, mapsKey,
     if (mode !== 'panels' || !panelConfig) return []
     return computePanelLayouts(solar3DModel, panelConfig, sp.panelWidthMeters, sp.panelHeightMeters)
   }, [solar3DModel, panelConfig, mode, sp.panelWidthMeters, sp.panelHeightMeters])
-
-  // Primary 3D source = Google Photorealistic 3D Tiles. We only fall back to the
-  // Google Solar DSM heightmap when the tiles API key is missing or DSM is the
-  // only thing available for the address.
-  const [tilesAvailable, setTilesAvailable] = useState(true)
-  const handleTilesUnavailable = useCallback(() => {
-    setTilesAvailable(false)
-  }, [])
-  const useGoogleTiles = !!mapsKey && tilesAvailable
-  const useDsmMesh = (!useGoogleTiles && !!dsm) || (!tilesAvailable && !!dsm)
 
   const GEOID_UK = 47  // UK geoid offset (EGM2008 → WGS84 ellipsoid)
   // Anchor on Google Solar's reported eave heights when DSM isn't loaded
