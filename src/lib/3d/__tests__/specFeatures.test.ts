@@ -78,24 +78,24 @@ describe('buildGarage', () => {
     const mesh = buildGarage({
       wallStart: new THREE.Vector3(-4, 0, 0),
       wallEnd:   new THREE.Vector3( 4, 0, 0),
-      wallOutwardNormal: new THREE.Vector3(0, 0, -1),
       offsetAlongEdgeM: 0, widthM: 3, depthM: 5, heightM: 2.5,
       attachment: 'attached',
     })
     const bb = new THREE.Box3().setFromObject(mesh)
-    expect(bb.max.z).toBeLessThanOrEqual(0.05)  // touches the wall plane (z=0)
+    // outward = +Z for wallDir=+X; garage extends +Z from z=0
+    expect(bb.min.z).toBeGreaterThanOrEqual(-0.05)  // touches the wall plane (z=0)
   })
 
   it('placed 0.5 m off the wall when detached', () => {
     const mesh = buildGarage({
       wallStart: new THREE.Vector3(-4, 0, 0),
       wallEnd:   new THREE.Vector3( 4, 0, 0),
-      wallOutwardNormal: new THREE.Vector3(0, 0, -1),
       offsetAlongEdgeM: 0, widthM: 3, depthM: 5, heightM: 2.5,
       attachment: 'detached',
     })
     const bb = new THREE.Box3().setFromObject(mesh)
-    expect(bb.max.z).toBeLessThan(-0.4)  // pushed outward away from wall
+    // outward = +Z; detach gap pushes min.z to +0.5
+    expect(bb.min.z).toBeGreaterThan(0.4)  // pushed outward away from wall
   })
 })
 
@@ -120,7 +120,6 @@ describe('rotation correctness on non-±X walls', () => {
     const mesh = buildGarage({
       wallStart: new THREE.Vector3(0, 0, -4),
       wallEnd:   new THREE.Vector3(0, 0,  4),
-      wallOutwardNormal: new THREE.Vector3(1, 0, 0),
       offsetAlongEdgeM: 0, widthM: 3, depthM: 5, heightM: 2.5,
       attachment: 'attached',
     })
