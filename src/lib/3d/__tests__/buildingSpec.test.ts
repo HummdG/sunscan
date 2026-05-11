@@ -34,6 +34,17 @@ describe('BuildingSpecSchema', () => {
     expect(() => BuildingSpecSchema.parse(bad as never)).toThrow()
   })
 
+  it('rejects chimney positioned absurdly far from the building', () => {
+    const bad = {
+      ...FALLBACK_SPEC,
+      features: {
+        ...FALLBACK_SPEC.features,
+        chimneys: [{ x: 9999, z: 0, widthM: 1, depthM: 1, heightAboveRoofM: 1 }],
+      },
+    }
+    expect(() => BuildingSpecSchema.parse(bad)).toThrow()
+  })
+
   it('accepts a spec with chimneys and dormers', () => {
     const good = {
       ...FALLBACK_SPEC,

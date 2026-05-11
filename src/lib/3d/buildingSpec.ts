@@ -14,7 +14,7 @@ const HexColor = z.string().regex(/^#[0-9a-fA-F]{6}$/, 'Must be a 6-digit hex co
 const RoofPlane = z.object({
   footprintEdgeIndex: z.number().int().min(0),
   pitchDeg: z.number().min(0).max(60),
-  azimuthDeg: z.number().min(0).max(360),
+  azimuthDeg: z.number().min(0).lt(360),
   ridgeSharedWithPlaneIndex: z.number().int().min(0).optional(),
 })
 
@@ -24,8 +24,8 @@ const Roof = z.object({
 })
 
 const Chimney = z.object({
-  x: z.number(),
-  z: z.number(),
+  x: z.number().min(-25).max(25),
+  z: z.number().min(-25).max(25),
   widthM: z.number().min(0.3).max(3),
   depthM: z.number().min(0.3).max(3),
   heightAboveRoofM: z.number().min(0.2).max(3.5),
