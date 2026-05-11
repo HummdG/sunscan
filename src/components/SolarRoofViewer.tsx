@@ -1278,7 +1278,10 @@ export function SolarRoofViewer({ insights, dataLayers, lat, lng, osBuilding, on
         </TabsList>
       </Tabs>
 
-      <div className="relative rounded-xl overflow-hidden bg-sky-100" style={{ height: 380 }}>
+      <div
+        className="relative rounded-xl overflow-hidden"
+        style={{ height: 380, background: '#243A2E' }}
+      >
 
         {/* 3D Canvas — always mounted to preserve orbit state */}
         <div
