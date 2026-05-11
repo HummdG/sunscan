@@ -50,7 +50,7 @@ A 5-step wizard (`/survey`) collects an address, electricity bill, **explicit us
 - `src/lib/db.ts` — Prisma singleton with PrismaPg adapter (1 connection per serverless instance).
 
 **3D viewer:**
-`Solar3DViewer.tsx` uses React Three Fiber. The canvas is captured as base64 and embedded in the PDF. Three.js convention used throughout: **x = east, z = south** (z is inverted from typical map north-up).
+`SolarRoofViewer.tsx` uses React Three Fiber. Primary 3D source is **Google Photorealistic 3D Tiles** streamed via the Map Tiles API — set `NEXT_PUBLIC_GOOGLE_MAPS_API_KEY` and enable the *Map Tiles API* in Google Cloud. When tiles fail to load (≥3 `tile-load-error` events) the viewer falls back to a **Google Solar DSM heightmap mesh** (`DsmMesh`) so the building still appears even outside Photorealistic Tiles coverage. The legacy LiDAR / OS NGD / procedural Solar-segment reconstruction modes have been removed: translucent roof-segment overlays and panel-placement rectangles are now composited on top of the photo-textured tiles (or the DSM mesh). The PDF capture path waits up to 800ms for in-flight tiles to land before sampling the WebGL canvas. Three.js convention used throughout: **x = east, z = south** (z is inverted from typical map north-up). The older `Solar3DViewer.tsx` remains in-tree only for legacy reports.
 
 ## MCS Solar Calculation
 
