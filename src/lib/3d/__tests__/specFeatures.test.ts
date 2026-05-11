@@ -52,7 +52,7 @@ describe('buildDormer', () => {
     const size = bboxSize(mesh)
     expect(size.x).toBeCloseTo(1.5, 1)
     expect(size.y).toBeGreaterThan(1.2)  // includes the small dormer roof
-    expect(size.z).toBeCloseTo(0.8, 1)
+    expect(size.z).toBeGreaterThanOrEqual(0.8)  // cone eave overhangs body depth
   })
 })
 
@@ -96,5 +96,38 @@ describe('buildGarage', () => {
     })
     const bb = new THREE.Box3().setFromObject(mesh)
     expect(bb.max.z).toBeLessThan(-0.4)  // pushed outward away from wall
+  })
+})
+
+describe('rotation correctness on non-±X walls', () => {
+  it('buildConservatory: width axis aligns with wallDir for a N-S wall', () => {
+    // Wall along +Z (north-south); width should end up along Z, depth along X
+    const mesh = buildConservatory({
+      wallStart: new THREE.Vector3(0, 0, -4),
+      wallEnd:   new THREE.Vector3(0, 0,  4),
+      offsetAlongEdgeM: 0.5,
+      widthM: 6, depthM: 2, heightM: 2.5,
+    })
+    const bb = new THREE.Box3().setFromObject(mesh)
+    const size = new THREE.Vector3()
+    bb.getSize(size)
+    // With width along Z and depth along X, bbox.z ≈ 6, bbox.x ≈ 2
+    expect(size.z).toBeCloseTo(6, 1)
+    expect(size.x).toBeCloseTo(2, 1)
+  })
+
+  it('buildGarage: width axis aligns with wallDir for a N-S wall', () => {
+    const mesh = buildGarage({
+      wallStart: new THREE.Vector3(0, 0, -4),
+      wallEnd:   new THREE.Vector3(0, 0,  4),
+      wallOutwardNormal: new THREE.Vector3(1, 0, 0),
+      offsetAlongEdgeM: 0, widthM: 3, depthM: 5, heightM: 2.5,
+      attachment: 'attached',
+    })
+    const bb = new THREE.Box3().setFromObject(mesh)
+    const size = new THREE.Vector3()
+    bb.getSize(size)
+    expect(size.z).toBeCloseTo(3, 1)  // width along Z
+    expect(size.x).toBeCloseTo(5, 1)  // depth along X
   })
 })

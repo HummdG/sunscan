@@ -49,18 +49,18 @@ export function buildDormer(opts: DormerInput): THREE.Group {
   const body = new THREE.BoxGeometry(opts.widthM, opts.heightM, opts.projectionM)
   const bodyMesh = new THREE.Mesh(body, new THREE.MeshStandardMaterial({ color: 0xcccccc }))
   bodyMesh.position.copy(centre)
-  // Rotate so local X aligns with wallDir.
-  // Three.js Y-rotation by θ maps local X → world (cos θ, 0, sin θ),
-  // so θ = atan2(wallDir.z, wallDir.x).
+  // Rotate around Y so the box's local X-axis aligns with wallDir.
+  // Three.js Y-rotation by θ maps (1,0,0) → (cos θ, 0, -sin θ),
+  // so for wallDir = (cos α, 0, sin α) we need θ = -α = -atan2(wallDir.z, wallDir.x).
   const yAxis = new THREE.Vector3(0, 1, 0)
-  const angle = Math.atan2(wallDir.z, wallDir.x)
+  const angle = -Math.atan2(wallDir.z, wallDir.x)
   bodyMesh.setRotationFromAxisAngle(yAxis, angle)
   group.add(bodyMesh)
 
-  // Tiny dormer roof — keep cone radius ≤ min(width, projection)/2 so the
-  // bounding box isn't inflated beyond the body footprint.
+  // Dormer roof cone: radius = max(width, projection)/2 × √2 so the 4-segment
+  // cone's bounding box equals the larger of widthM / projectionM exactly.
   if (opts.roofType !== 'flat') {
-    const roof = new THREE.ConeGeometry(Math.min(opts.widthM, opts.projectionM) * 0.5, 0.5, 4)
+    const roof = new THREE.ConeGeometry(Math.max(opts.widthM, opts.projectionM) * 0.5 * Math.SQRT2, 0.5, 4, 1, false, Math.PI / 4)
     const roofMesh = new THREE.Mesh(roof, new THREE.MeshStandardMaterial({ color: ROOF_TILE_COLOR }))
     roofMesh.position.set(centre.x, baseY + opts.heightM + 0.25, centre.z)
     roofMesh.setRotationFromAxisAngle(yAxis, angle)
@@ -104,7 +104,7 @@ export function buildConservatory(opts: ConservatoryInput): THREE.Group {
   })
   const mesh = new THREE.Mesh(geom, mat)
   mesh.position.copy(centre)
-  const angle = Math.atan2(wallDir.x, wallDir.z)
+  const angle = -Math.atan2(wallDir.z, wallDir.x)
   mesh.setRotationFromAxisAngle(new THREE.Vector3(0, 1, 0), angle)
   group.add(mesh)
 
@@ -141,7 +141,7 @@ export function buildGarage(opts: GarageInput): THREE.Group {
   const mat = new THREE.MeshStandardMaterial({ color: 0xb0a89a })
   const mesh = new THREE.Mesh(geom, mat)
   mesh.position.copy(centre)
-  const angle = Math.atan2(wallDir.x, wallDir.z)
+  const angle = -Math.atan2(wallDir.z, wallDir.x)
   mesh.setRotationFromAxisAngle(new THREE.Vector3(0, 1, 0), angle)
   group.add(mesh)
 
