@@ -1232,6 +1232,8 @@ export function SolarRoofViewer({ insights, dataLayers, lat, lng, osBuilding, on
 
   const allX = geos.flatMap(g => g.corners.map(c => c[0]))
   const allZ = geos.flatMap(g => g.corners.map(c => c[2]))
+  // Building diagonal in metres; minimum 8 m so very small detached structures
+  // still get a reasonable frame.
   const span = allX.length
     ? Math.max(
         Math.max(...allX) - Math.min(...allX),
@@ -1239,8 +1241,13 @@ export function SolarRoofViewer({ insights, dataLayers, lat, lng, osBuilding, on
         8,
       )
     : 12
-  const camDist = span * 1.8
-  const camH = span * 0.9
+
+  // Photorealistic tiles look best from a 35° elevation with the building
+  // filling ~60% of the viewport. Tighter than the legacy reconstruction
+  // because the tiles include surrounding ground/neighbours we don't want to
+  // dominate the frame.
+  const camDist = span * (!!mapsKey ? 1.3 : 1.8)
+  const camH = span * (!!mapsKey ? 0.7 : 0.9)
 
   const camPos: [number, number, number] = [camDist * 0.3, camH, camDist]
 
