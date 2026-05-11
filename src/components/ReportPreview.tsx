@@ -63,7 +63,9 @@ function StatCard({
 }
 
 export function ReportPreview({ data }: ReportPreviewProps) {
-  const isEstimatedBill = data.billSource === 'default'
+  // Legacy reports may carry billSource: 'default' — hydrateReportData normalises
+  // to 'manual', so the only remaining "estimated" surface is the footprint source.
+  const isEstimatedBill = false
   const isEstimatedFootprint = data.footprintSource === 'estimated'
 
   // Parse footprint — use Google Solar building centre when available so segment
@@ -305,7 +307,7 @@ export function ReportPreview({ data }: ReportPreviewProps) {
                 ['System loss', `${(data.assumptions.systemLoss * 100).toFixed(0)}%`],
                 ['Export tariff (SEG)', `${data.assumptions.exportTariffPencePerKwh}p/kWh`],
                 ['Annual consumption', `${data.annualKwh.toLocaleString()} kWh`],
-                ['Consumption source', data.billSource === 'default' ? 'UK average' : data.billSource === 'ocr' ? 'OCR from bill' : 'Manual entry'],
+                ['Consumption source', data.billSource === 'ocr' ? 'OCR from bill' : 'Manual entry'],
               ].map(([label, val]) => (
                 <div key={label} className="flex justify-between border-b border-muted pb-1">
                   <dt className="text-muted-foreground">{label}</dt>

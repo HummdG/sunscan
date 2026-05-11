@@ -22,13 +22,14 @@ No test suite exists yet.
 
 ## Architecture
 
-A 3-step wizard (`/survey`) collects an address and electricity bill, then `/api/report/generate` orchestrates all computation and redirects to `/report/[id]`.
+A 5-step wizard (`/survey`) collects an address, electricity bill, **explicit user confirmation of roof + consumption** (the Review step), and a system tier, then `/api/report/generate` orchestrates all computation and redirects to `/report/[id]`. The route refuses (HTTP 422) when load-bearing data is missing — no silent fallback to a fake 10×8m building or a 3,500 kWh default consumption.
 
 **Data flow:**
 1. Address typed → `/api/os/address` (OS Places autocomplete) → user selects
-2. Building auto-fetched → `/api/os/building` (OS NGD Features API, UPRN filter → bbox fallback → 10×8m estimate)
-3. Bill uploaded → `/api/bill/parse` (GPT-4o vision OCR → manual entry fallback)
-4. Submit → `/api/report/generate`:
+2. Building auto-fetched → `/api/os/building` (OS NGD Features API, UPRN filter → bbox fallback → **null** if neither hits)
+3. Bill uploaded → `/api/bill/parse` (**Mistral OCR** for both PDFs and images → manual entry fallback). Returns 503 if `MISTRAL_API_KEY` is missing.
+4. Review step shows the detected roof + consumption; user confirms or corrects, producing a `dataConfidence` envelope (`{ roof, consumption, tariff }`) that ships with the generate payload and is persisted on the Report row.
+5. Submit → `/api/report/generate`:
    - MCS zone lookup (`data/mcs_postcode_zones.csv`, longest-prefix match)
    - Irradiance lookup (`data/mcs_irradiance.csv`, keyed by zone + pitch + orientation)
    - Roof plane estimation + best south-facing plane selection (`lib/geometry.ts`)
@@ -44,7 +45,8 @@ A 3-step wizard (`/survey`) collects an address and electricity bill, then `/api
 - `src/lib/geometry.ts` — EPSG:27700→WGS84 (proj4), flat-earth local metres, roof plane estimation.
 - `src/lib/panelLayout.ts` — Grid packing: 300mm edge setback, 20mm gaps, landscape panels (1.722m × 1.134m).
 - `src/lib/osApi.ts` — OS Places and OS NGD wrappers; falls back to mock Norwich data when `OS_API_KEY` is absent.
-- `src/lib/billParser.ts` — GPT-4o vision OCR; returns structured JSON with confidence level.
+- `src/lib/billParser.ts` — Mistral OCR (`mistral-ocr-latest`) + Mistral chat extraction. Throws `BillOcrUnavailableError` when `MISTRAL_API_KEY` is missing so the route can return 503 (no mock fallback).
+- `src/components/ReviewStep.tsx` — Wizard step that gates generation. Exports `isReviewReady()` and `computeDataConfidence()` for the parent form.
 - `src/lib/db.ts` — Prisma singleton with PrismaPg adapter (1 connection per serverless instance).
 
 **3D viewer:**
@@ -60,9 +62,9 @@ systemKwp           = panelCount × panelWattPeak / 1000
 
 MCS orientation convention: **0° = South, 90° = East or West, 180° = North** (different from compass bearings).
 
-Self-consumption model: base ~30%, +5% per kWh battery storage, capped at 85%.
+Self-consumption is computed per month from a UK seasonal generation profile and a winter-heavy consumption profile, with a 25% day-use ratio. Battery throughput is the lesser of monthly surplus, `batteryKwh × daysInMonth × 0.9`, and remaining evening demand.
 
-25-year savings projection uses 4% annual energy price inflation.
+25-year savings projection applies 0.5%/year linear panel degradation and the `energyInflationRate` from assumptions (default 3%).
 
 ## Environment Variables
 
@@ -72,11 +74,12 @@ Self-consumption model: base ~30%, +5% per kWh battery storage, capped at 85%.
 | `DIRECT_URL` | Direct connection for Prisma migrations |
 | `SUPABASE_SERVICE_KEY` | Server-side only — never expose to client |
 | `NEXT_PUBLIC_SUPABASE_URL` | Public, client-accessible |
-| `OS_API_KEY` | Server-side only; omit to use mock mode |
-| `OPENAI_API_KEY` | Server-side only; omit to fall back to manual bill entry |
+| `OS_API_KEY` | Server-side only; omit to disable OS NGD lookup |
+| `MISTRAL_API_KEY` | Server-side only; bill OCR via Mistral. Omit and `/api/bill/parse` returns 503; users must enter the bill manually |
+| `GOOGLE_SOLAR_API_KEY` | Server-side only; used for higher-fidelity roof + panel layout |
 | `NEXT_PUBLIC_APP_URL` | e.g. `http://localhost:3000` in dev |
 
-**Mock mode:** Omitting `OS_API_KEY` returns 5 mock Norwich addresses and a 10m × 8m footprint — sufficient to run the full flow locally.
+**Mock mode:** Omitting `OS_API_KEY` still returns 5 mock Norwich addresses for autocomplete, but `fetchBuilding()` returns `null` — there is no fake 10×8m fallback. The Review step blocks generation in that case.
 
 ## Database
 
@@ -86,9 +89,6 @@ Run `npx prisma migrate dev` after any schema change in `prisma/schema.prisma`, 
 
 ## Known Limitations / TODOs
 
-- PDF bill uploads return null from GPT-4o (needs PNG conversion before sending)
-- Tariff is patched into `SolarResults` after `runSolarCalculations()` instead of being passed in directly
-- 25-year savings projection is flat (no panel degradation curve)
 - Only the best single roof plane is used — multi-plane selection not yet implemented
 - `/admin` dashboard not yet built
 - No Stripe payment gate (PDF download is currently free)

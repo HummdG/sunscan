@@ -342,6 +342,37 @@ function DataRow({ label, value, estimated }: { label: string; value: string; es
   )
 }
 
+// ─── Per-field provenance footnote ───────────────────────────────────────────
+// Renders a tiny grey caption under the headline stats explaining where each
+// number came from. Replaces the old blanket "estimate only" disclaimer.
+
+function provenanceLine(data: ReportData): string {
+  const dc = data.dataConfidence
+  const roofSource = dc?.roof === 'os-confirmed'
+    ? (data.footprintSource === 'google_solar' ? 'Google Solar imagery' : 'Ordnance Survey NGD')
+    : dc?.roof === 'user-confirmed'
+      ? 'Confirmed by you'
+      : (data.footprintSource === 'google_solar' ? 'Google Solar imagery' :
+         data.footprintSource === 'os_ngd' ? 'Ordnance Survey NGD' :
+         'Not recorded')
+  const consumptionSource = dc?.consumption === 'ocr-confirmed'
+    ? 'Extracted from your bill'
+    : dc?.consumption === 'manual-confirmed'
+      ? 'Entered by you'
+      : (data.billSource === 'ocr' ? 'Extracted from your bill' :
+         data.billSource === 'manual' ? 'Entered by you' :
+         'Not recorded')
+  return `Roof: ${roofSource}. Consumption: ${consumptionSource}.`
+}
+
+function ProvenanceFootnote({ data }: { data: ReportData }) {
+  return (
+    <Text style={{ fontSize: 7, color: MUTED, marginTop: 6, fontStyle: 'italic' }}>
+      {provenanceLine(data)}
+    </Text>
+  )
+}
+
 // ─── Main document ─────────────────────────────────────────────────────────────
 
 interface ReportDocumentProps {
@@ -350,7 +381,9 @@ interface ReportDocumentProps {
 }
 
 export function ReportDocument({ data, model3dImage }: ReportDocumentProps) {
-  const isEstimatedBill = data.billSource === 'default'
+  // Legacy reports may carry billSource: 'default' — hydrateReportData normalises
+  // to 'manual', so the only remaining "estimated" surface is the footprint source.
+  const isEstimatedBill = false
   const isEstimatedFootprint = data.footprintSource === 'estimated'
   const annualBillBefore = (data.annualKwh * data.tariffPencePerKwh) / 100 + (data.standingChargePencePerDay * 365) / 100
   const annualBillAfter = annualBillBefore - data.results.annualSavingsPounds
@@ -436,20 +469,23 @@ export function ReportDocument({ data, model3dImage }: ReportDocumentProps) {
           <View style={styles.statsRow}>
             <StatCard value={`${data.systemSizeKw.toFixed(2)} kWp`} label="System Size" />
             <StatCard value={String(data.panelCount)} label="Solar Panels" />
-            <StatCard value={`${data.results.annualGenerationKwh.toLocaleString()} kWh`} label="Est. Annual Generation" />
+            <StatCard value={`${data.results.annualGenerationKwh.toLocaleString()} kWh`} label="Annual Generation" />
           </View>
           <View style={styles.statsRow}>
-            <StatCard value={`£${data.results.annualSavingsPounds.toLocaleString()}`} label="Est. Annual Savings" color={GREEN} />
+            <StatCard value={`£${data.results.annualSavingsPounds.toLocaleString()}`} label="Annual Savings" color={GREEN} />
             <StatCard value={`${data.results.paybackYears} yrs`} label="Payback Period" />
             <StatCard value={`${data.results.co2SavedTonnesPerYear} t`} label="CO₂ Saved/Year" color={GREEN} />
           </View>
+          <ProvenanceFootnote data={data} />
 
           {model3dImage && (
             <View style={{ marginTop: 16 }}>
               <Text style={styles.subHeader}>3D Visualisation</Text>
               <Image src={model3dImage} style={{ width: '100%', maxHeight: 220, objectFit: 'contain', borderRadius: 6 }} />
               {isEstimatedFootprint && (
-                <Text style={styles.estimatedTag}>⚠ Building footprint is estimated. Exact panel placement may vary.</Text>
+                <Text style={{ fontSize: 7, color: MUTED, marginTop: 6, fontStyle: 'italic' }}>
+                  Building outline reconstructed from address coordinates. Exact panel placement confirmed at site survey.
+                </Text>
               )}
             </View>
           )}
@@ -643,7 +679,7 @@ export function ReportDocument({ data, model3dImage }: ReportDocumentProps) {
 
           <Text style={[styles.disclaimer, { marginTop: 16 }]}>
             Zero-rate VAT applies to the supply and installation of solar panels on residential properties (HMRC Notice 708/6).
-            This quotation is based on estimated building data and consumption figures. A site survey may adjust the final specification and price.
+            Final specification, mounting, and cabling are confirmed at site survey before installation.
           </Text>
         </View>
         <Text style={styles.pageNumber} render={({ pageNumber, totalPages }) => `${pageNumber} / ${totalPages}`} fixed />
@@ -651,40 +687,47 @@ export function ReportDocument({ data, model3dImage }: ReportDocumentProps) {
 
       <Page size="A4" style={styles.page}>
         <View style={styles.sectionPage}>
-          <PageHeader title="Assumptions & Disclaimer" />
+          <PageHeader title="Assumptions" />
 
-          <Text style={styles.subHeader}>Calculation Assumptions</Text>
+          <Text style={styles.subHeader}>Site &amp; Roof Inputs</Text>
           <DataRow label="MCS Zone" value={data.mcsZone} />
           <DataRow label="In-Plane Irradiance" value={`${Math.round(data.irradianceKwhPerM2)} kWh/m²/year`} />
-          <DataRow label="Roof Pitch" value={`${Math.round(data.assumptions.roofPitchDeg)}°`} estimated={isEstimatedFootprint} />
-          <DataRow label="Roof Orientation" value={`${Math.round(data.assumptions.roofOrientationDeg)}° from South`} estimated={isEstimatedFootprint} />
+          <DataRow label="Roof Pitch" value={`${Math.round(data.assumptions.roofPitchDeg)}°`} />
+          <DataRow label="Roof Orientation" value={`${Math.round(data.assumptions.roofOrientationDeg)}° from South`} />
+          <DataRow label="Roof Source" value={
+            data.dataConfidence?.roof === 'os-confirmed'
+              ? (data.footprintSource === 'google_solar' ? 'Google Solar imagery' : 'Ordnance Survey NGD')
+              : data.dataConfidence?.roof === 'user-confirmed'
+                ? 'Confirmed by you'
+                : (data.footprintSource === 'google_solar' ? 'Google Solar imagery' :
+                   data.footprintSource === 'os_ngd' ? 'Ordnance Survey NGD' :
+                   'Not recorded')
+          } />
+
+          <Text style={styles.subHeader}>Energy Inputs</Text>
+          <DataRow label="Annual Consumption" value={`${data.annualKwh.toLocaleString()} kWh`} />
+          <DataRow label="Unit Rate" value={`${data.tariffPencePerKwh.toFixed(1)}p / kWh`} />
+          <DataRow label="SEG Export Rate" value={`${data.exportTariffPencePerKwh.toFixed(1)}p / kWh`} />
+          <DataRow label="Consumption Source" value={
+            data.dataConfidence?.consumption === 'ocr-confirmed' ? 'Extracted from your bill, confirmed by you' :
+            data.dataConfidence?.consumption === 'manual-confirmed' ? 'Entered and confirmed by you' :
+            data.billSource === 'ocr' ? 'Extracted from your bill' :
+            'Entered manually'
+          } />
+
+          <Text style={styles.subHeader}>Modelling Assumptions</Text>
           <DataRow label="Shading Loss" value={`${(data.assumptions.shadingLoss * 100).toFixed(0)}%`} />
           <DataRow label="Inverter Loss" value={`${(data.assumptions.inverterLoss * 100).toFixed(0)}%`} />
           <DataRow label="System Loss" value={`${(data.assumptions.systemLoss * 100).toFixed(0)}%`} />
-          <DataRow label="Annual Consumption" value={`${data.annualKwh.toLocaleString()} kWh`} estimated={isEstimatedBill} />
-          <DataRow label="Consumption Source" value={
-            data.billSource === 'default' ? 'UK average (no bill provided)' :
-            data.billSource === 'ocr' ? 'Extracted from uploaded bill (OCR)' :
-            'Entered manually'
-          } />
+          <DataRow label="Performance Ratio" value={`${(((1 - data.assumptions.shadingLoss) * (1 - data.assumptions.inverterLoss) * (1 - data.assumptions.systemLoss)) * 100).toFixed(1)}% (MCS)`} />
+          <DataRow label="Panel Degradation" value={`${((data.assumptions.panelDegradationPerYear ?? 0.005) * 100).toFixed(1)}% / year`} />
+          <DataRow label="Energy Price Inflation" value={`${((data.assumptions.energyInflationRate ?? 0.03) * 100).toFixed(1)}% / year`} />
           <DataRow label="UK Grid Carbon Factor" value="0.233 kgCO₂/kWh (DESNZ 2024)" />
-          <DataRow label="Inflation Rate (savings projection)" value="4% per annum" />
 
-          {isEstimatedBill && (
-            <Text style={[styles.estimatedTag, { marginTop: 8 }]}>
-              ⚠ Annual consumption defaulted to UK average (3,500 kWh). No electricity bill was provided.
-              Actual savings may differ. Upload a bill for a personalised estimate.
-            </Text>
-          )}
-
-          <Text style={styles.subHeader}>Important Disclaimer</Text>
-          <Text style={styles.disclaimer}>
-            This proposal is based on estimated data and is intended as a guide only. Actual solar generation, savings, and payback may vary
-            depending on precise roof orientation, shading, system degradation, occupant behaviour, and future energy prices.
-            A physical site survey is required before a final system specification and firm quotation can be provided.
-            All generation figures are calculated using the MCS Performance Estimate methodology.
-            SunScan accepts no liability for any loss or damage arising from reliance on this estimate.
-            This document does not constitute a contract or legally binding offer.
+          <Text style={[styles.disclaimer, { marginTop: 12 }]}>
+            Generation figures are calculated using the MCS Performance Estimate methodology. Final
+            specification, mounting and cabling are confirmed at site survey. Savings depend on
+            future energy prices, household occupancy patterns and panel performance over time.
           </Text>
         </View>
         <Text style={styles.pageNumber} render={({ pageNumber, totalPages }) => `${pageNumber} / ${totalPages}`} fixed />

@@ -88,6 +88,10 @@ export interface SolarAssumptions {
   hasBattery: boolean
   batteryKwh: number
   exportTariffPencePerKwh: number
+  /** Annual energy price inflation used for the 25-year projection (0–1, default 0.03). */
+  energyInflationRate?: number
+  /** Annual panel degradation rate used for the 25-year projection (0–1, default 0.005). */
+  panelDegradationPerYear?: number
 }
 
 // ─── Roof geometry ───────────────────────────────────────────────────────────
@@ -131,6 +135,18 @@ export interface SolarResults {
   twentyFiveYearSavings: { year: number; saving: number; cumulative: number }[]
 }
 
+// ─── Data confidence (provenance) ────────────────────────────────────────────
+
+/**
+ * Records the provenance of the three load-bearing inputs to a proposal.
+ * Lets the PDF show per-field footnotes instead of a blanket disclaimer.
+ */
+export interface DataConfidence {
+  roof: 'os-confirmed' | 'user-confirmed'
+  consumption: 'ocr-confirmed' | 'manual-confirmed'
+  tariff: 'ocr' | 'manual'
+}
+
 // ─── Report data ─────────────────────────────────────────────────────────────
 
 export interface ReportData {
@@ -153,7 +169,7 @@ export interface ReportData {
   tariffPencePerKwh: number
   standingChargePencePerDay: number
   exportTariffPencePerKwh: number
-  billSource: 'ocr' | 'manual' | 'default'
+  billSource: 'ocr' | 'manual'
 
   // System
   panelCount: number
@@ -182,6 +198,9 @@ export interface ReportData {
 
   // Pricing (optional — present once a SystemConfiguration exists)
   quote?: import('./pricing/types').QuoteBreakdown | null
+
+  // Per-field provenance — drives PDF footnotes
+  dataConfidence?: DataConfidence | null
 }
 
 // ─── Google Solar API ────────────────────────────────────────────────────────
@@ -287,9 +306,10 @@ export interface GenerateReportPayload {
   tariffPencePerKwh: number
   standingChargePencePerDay: number
   exportTariffPencePerKwh: number
-  billSource: 'ocr' | 'manual' | 'default'
+  billSource: 'ocr' | 'manual'
   assumptions: SolarAssumptions
   solarApiJson?: string
   model3dImageBase64?: string
   chartImagesBase64?: string[]
+  dataConfidence: DataConfidence
 }

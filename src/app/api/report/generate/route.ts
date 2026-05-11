@@ -23,9 +23,11 @@ import type {
   ReportData,
   SolarAssumptions,
   GoogleSolarBuildingInsights,
+  DataConfidence,
 } from '@/lib/types'
 import type { PricingContext, RoofType, SystemConfig, QuoteBreakdown } from '@/lib/pricing/types'
 import { createClient } from '@supabase/supabase-js'
+import type { Prisma } from '@prisma/client'
 
 // ─── Supabase Storage client (server-side only) ──────────────────────────────
 
@@ -48,6 +50,14 @@ const AssumptionsSchema = z.object({
   hasBattery: z.boolean().default(false),
   batteryKwh: z.number().min(0).default(DEFAULT_ASSUMPTIONS.batteryKwh),
   exportTariffPencePerKwh: z.number().min(0).default(DEFAULT_ASSUMPTIONS.exportTariffPencePerKwh),
+  energyInflationRate: z.number().min(0).max(0.2).optional(),
+  panelDegradationPerYear: z.number().min(0).max(0.05).optional(),
+})
+
+const DataConfidenceSchema = z.object({
+  roof: z.enum(['os-confirmed', 'user-confirmed']),
+  consumption: z.enum(['ocr-confirmed', 'manual-confirmed']),
+  tariff: z.enum(['ocr', 'manual']),
 })
 
 const BodySchema = z.object({
@@ -62,13 +72,24 @@ const BodySchema = z.object({
   tariffPencePerKwh: z.number().min(1).max(100),
   standingChargePencePerDay: z.number().min(0).max(200),
   exportTariffPencePerKwh: z.number().min(0).max(50),
-  billSource: z.enum(['ocr', 'manual', 'default']),
+  billSource: z.enum(['ocr', 'manual']),
   assumptions: AssumptionsSchema,
   solarApiJson: z.string().optional(),
   model3dImageBase64: z.string().optional(),
   selectedTier: z.enum(['essential', 'standard', 'premium']).optional(),
   selectedConfig: z.unknown().optional(),
+  dataConfidence: DataConfidenceSchema,
 })
+
+type GenerateReason =
+  | 'no-footprint'
+  | 'no-roof-data'
+  | 'low-ocr-confidence'
+  | 'no-tariff'
+
+function reject(reason: GenerateReason, message: string) {
+  return NextResponse.json({ error: message, reason }, { status: 422 })
+}
 
 // ─── Default specs ────────────────────────────────────────────────────────────
 
@@ -100,6 +121,28 @@ export async function POST(request: NextRequest) {
 
     const data = parsed.data
     const assumptions: SolarAssumptions = data.assumptions
+    const dataConfidence: DataConfidence = data.dataConfidence
+    // Use the bill's export tariff as the source of truth for savings — these can drift
+    // from the modelling default in assumptions.
+    assumptions.exportTariffPencePerKwh = data.exportTariffPencePerKwh
+
+    // ── 0. Block silent fallbacks ─────────────────────────────────────────
+    // If the wizard claims OS-confirmed roof data, the footprint must be present.
+    if (dataConfidence.roof === 'os-confirmed' && !data.footprintGeojson && !data.solarApiJson) {
+      return reject(
+        'no-footprint',
+        'OS-confirmed roof claimed but no footprint or Solar API data was supplied.',
+      )
+    }
+    // If the user is the source-of-truth, we need explicit pitch + orientation.
+    if (dataConfidence.roof === 'user-confirmed') {
+      if (assumptions.roofPitchDeg <= 0 || assumptions.roofOrientationDeg < 0) {
+        return reject('no-roof-data', 'Roof pitch and orientation must be provided by the user.')
+      }
+    }
+    if (data.tariffPencePerKwh <= 0) {
+      return reject('no-tariff', 'A unit electricity tariff is required.')
+    }
 
     // ── 1. MCS zone + irradiance (always computed — used as verification) ──
     const postcodeDistrict = data.postcode.replace(/\s+/g, '').toUpperCase().slice(0, 4)
@@ -171,21 +214,25 @@ export async function POST(request: NextRequest) {
 
     if (!solarInsights) {
       // ── Legacy path: OS NGD footprint → estimated roof planes ──────────
-      let footprintLocal: [number, number][]
+      // We deliberately do NOT invent a fallback footprint. If we reach here
+      // without footprintGeojson, the wizard's Review step has either failed
+      // to validate or the dataConfidence claim doesn't match. Refuse.
+      if (!data.footprintGeojson) {
+        return reject(
+          'no-footprint',
+          'No roof geometry available. Confirm the roof on the Review step before generating.',
+        )
+      }
 
-      const FALLBACK_FOOTPRINT: [number, number][] = [[-5, -4], [5, -4], [5, 4], [-5, 4], [-5, -4]]
-
-      if (data.footprintGeojson) {
-        const geojson = JSON.parse(data.footprintGeojson) as { type: string; coordinates: number[][][] }
-        const ring = geojson.coordinates[0] as [number, number][]
-        const centre = polygonCentroid(ring)
-        footprintLocal = wgs84ToLocalMetres(ring, centre)
-        if (polygonArea(footprintLocal) < 10) {
-          console.warn('Degenerate footprint — falling back to 10×8 m rectangle')
-          footprintLocal = FALLBACK_FOOTPRINT
-        }
-      } else {
-        footprintLocal = FALLBACK_FOOTPRINT
+      const geojson = JSON.parse(data.footprintGeojson) as { type: string; coordinates: number[][][] }
+      const ring = geojson.coordinates[0] as [number, number][]
+      const centre = polygonCentroid(ring)
+      const footprintLocal = wgs84ToLocalMetres(ring, centre)
+      if (polygonArea(footprintLocal) < 10) {
+        return reject(
+          'no-roof-data',
+          'The detected building footprint is too small to size a system. Please confirm the roof on the Review step.',
+        )
       }
 
       const roofPlanes = estimateRoofPlanes(footprintLocal, assumptions.roofPitchDeg)
@@ -255,16 +302,9 @@ export async function POST(request: NextRequest) {
         panelSpec,
         irradianceKwhPerM2,
         data.annualKwh,
+        data.tariffPencePerKwh,
         assumptions,
       )
-      // Patch tariff
-      const selfSaving = (results.selfConsumptionKwh * data.tariffPencePerKwh) / 100
-      const exportEarning = (results.exportKwh * assumptions.exportTariffPencePerKwh) / 100
-      results.annualSavingsPounds = Math.round(selfSaving + exportEarning)
-      results.paybackYears =
-        results.annualSavingsPounds > 0
-          ? Math.round((assumptions.systemCostPounds / results.annualSavingsPounds) * 10) / 10
-          : 99
     }
 
     // ── 4. Build ReportData ───────────────────────────────────────────────
@@ -293,6 +333,7 @@ export async function POST(request: NextRequest) {
       solarCoveragePercent,
       imageryQuality: imageryQuality as 'HIGH' | 'MEDIUM' | 'LOW' | null,
       mcsGenerationKwh,
+      dataConfidence,
     }
 
     // ── 5. Save to DB ─────────────────────────────────────────────────────
@@ -340,6 +381,7 @@ export async function POST(request: NextRequest) {
         solarCoveragePercent,
         imageryQuality,
         mcsGenerationKwh,
+        dataConfidence: dataConfidence as unknown as Prisma.InputJsonValue,
       },
     })
 

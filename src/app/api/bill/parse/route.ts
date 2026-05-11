@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { parseBillWithOpenAI } from '@/lib/billParser'
+import { parseBill, BillOcrUnavailableError } from '@/lib/billParser'
 
 const ALLOWED_MIME_TYPES = [
   'application/pdf',
@@ -32,10 +32,30 @@ export async function POST(request: NextRequest) {
     }
 
     const buffer = Buffer.from(await file.arrayBuffer())
-    const result = await parseBillWithOpenAI(buffer, file.type)
+
+    let result
+    try {
+      result = await parseBill(buffer, file.type)
+    } catch (err) {
+      if (err instanceof BillOcrUnavailableError) {
+        return NextResponse.json(
+          {
+            success: false,
+            requiresManualEntry: true,
+            error: 'Bill OCR is not configured on this environment. Please enter your bill values manually.',
+          },
+          { status: 503 },
+        )
+      }
+      throw err
+    }
 
     if (!result) {
-      return NextResponse.json({ success: false, requiresManualEntry: true })
+      return NextResponse.json({
+        success: false,
+        requiresManualEntry: true,
+        error: 'We couldn\'t extract the unit rate and annual kWh from this file. Please enter them manually.',
+      })
     }
 
     return NextResponse.json({ success: true, data: result })

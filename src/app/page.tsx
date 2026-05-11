@@ -1713,7 +1713,7 @@ function Footer() {
         <div className="flex flex-col sm:flex-row items-center justify-between gap-4 pt-8 border-t"
           style={{ borderColor: 'var(--ss-border)' }}>
           <p className="ss-mono text-xs text-center sm:text-left" style={{ color: 'var(--ss-t4)' }}>
-            © 2024 SunScan Ltd. Solar estimates are indicative only. A site survey is required for a firm quotation.
+            © 2026 SunScan Ltd. MCS-aligned solar proposals built from Ordnance Survey roof data and your real electricity bill.
           </p>
           <div className="flex gap-5">
             {['Privacy', 'Terms', 'Cookies'].map(l => (

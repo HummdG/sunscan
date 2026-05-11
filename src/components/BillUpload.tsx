@@ -51,7 +51,7 @@ export function BillUpload({ value, onChange }: BillUploadProps) {
           ocrConfidence: bill.confidence,
         })
       } else {
-        setUploadError('Could not extract data from this bill. Please enter values manually.')
+        setUploadError(data.error ?? 'Could not extract data from this bill. Please enter values manually.')
         onChange({ ...value, source: 'manual' })
       }
     } catch {

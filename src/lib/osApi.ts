@@ -50,8 +50,17 @@ export async function searchAddresses(query: string): Promise<OsAddress[]> {
 
 // ─── Building footprint (OS NGD Features API) ────────────────────────────────
 
-export async function fetchBuilding(uprn: string, lat?: number, lng?: number): Promise<OsBuilding> {
-  if (!OS_API_KEY) return mockFetchBuilding(lat, lng)
+/**
+ * Returns the real OS NGD building footprint for an address, or `null` if the
+ * key isn't configured / OS has no data. We deliberately do NOT invent a
+ * fallback footprint — the wizard's Review step surfaces the missing data to
+ * the user so the report is grounded in real geometry.
+ */
+export async function fetchBuilding(uprn: string, lat?: number, lng?: number): Promise<OsBuilding | null> {
+  if (!OS_API_KEY) {
+    console.warn('OS_API_KEY not set — building lookup disabled')
+    return null
+  }
 
   // Try UPRN filter first — results are all parts of this specific building
   let features = await queryNgdBuilding({ uprn, apiKey: OS_API_KEY })
@@ -66,8 +75,8 @@ export async function fetchBuilding(uprn: string, lat?: number, lng?: number): P
   }
 
   if (features.length === 0) {
-    console.warn(`OS NGD: no building found for UPRN ${uprn} — using estimated footprint`)
-    return mockFetchBuilding(lat, lng)
+    console.warn(`OS NGD: no building found for UPRN ${uprn}`)
+    return null
   }
 
   return featuresToBuilding(features, isUprnResult)
@@ -180,7 +189,7 @@ function extractRings(geom: { type: string; coordinates: GeoJsonCoords }): numbe
   return null
 }
 
-function featuresToBuilding(features: Record<string, unknown>[], allowMultiPart: boolean = false): OsBuilding {
+function featuresToBuilding(features: Record<string, unknown>[], allowMultiPart: boolean = false): OsBuilding | null {
   // Parse every valid feature into a BuildingPart, tracking original index
   interface PartEntry { part: BuildingPart; featureIndex: number }
   const entries: PartEntry[] = []
@@ -212,7 +221,7 @@ function featuresToBuilding(features: Record<string, unknown>[], allowMultiPart:
     })
   }
 
-  if (entries.length === 0) return mockFetchBuilding()
+  if (entries.length === 0) return null
 
   // Sort largest first — index 0 is always the primary (main block)
   entries.sort((a, b) => b.part.areaM2 - a.part.areaM2)
@@ -277,22 +286,3 @@ function mockSearchAddresses(query: string): OsAddress[] {
   ]
 }
 
-function mockFetchBuilding(lat?: number, lng?: number): OsBuilding {
-  const cLat = lat ?? 51.5
-  const cLng = lng ?? -0.1
-  // ~10m × 8m house footprint centred on the address coordinates
-  const dLng = 0.000075 // ~5m east-west at UK latitudes
-  const dLat = 0.000036 // ~4m north-south
-  const footprintPolygon: [number, number][] = [
-    [cLng - dLng, cLat - dLat],
-    [cLng + dLng, cLat - dLat],
-    [cLng + dLng, cLat + dLat],
-    [cLng - dLng, cLat + dLat],
-    [cLng - dLng, cLat - dLat],
-  ]
-  return {
-    footprintPolygon,
-    source: 'estimated',
-    areaM2: 80,
-  }
-}

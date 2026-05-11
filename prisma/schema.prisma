@@ -48,6 +48,7 @@ model Report {
   solarCoveragePercent      Float?
   imageryQuality            String?
   mcsGenerationKwh          Float?
+  dataConfidence            Json?
   configuration             SystemConfiguration?
 }
 

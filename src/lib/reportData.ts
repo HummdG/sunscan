@@ -5,6 +5,7 @@
 import type { Prisma } from '@prisma/client'
 import type {
   BatterySpec,
+  DataConfidence,
   InverterSpec,
   PanelSpec,
   ReportData,
@@ -33,6 +34,12 @@ export function hydrateReportData(report: ReportWithConfig): ReportData {
     }
   }
 
+  // Per-field provenance. Legacy rows (pre-2026-05) have no value — render falls
+  // back to a generic "not recorded" footnote in the PDF.
+  const dataConfidence: DataConfidence | null = report.dataConfidence
+    ? (report.dataConfidence as unknown as DataConfidence)
+    : null
+
   return {
     id: report.id,
     quoteNumber: report.quoteNumber,
@@ -47,7 +54,7 @@ export function hydrateReportData(report: ReportWithConfig): ReportData {
     tariffPencePerKwh: report.tariffPencePerKwh,
     standingChargePencePerDay: report.standingChargePencePerDay,
     exportTariffPencePerKwh: report.exportTariffPencePerKwh,
-    billSource: report.billSource as 'ocr' | 'manual' | 'default',
+    billSource: (report.billSource === 'default' ? 'manual' : report.billSource) as 'ocr' | 'manual',
     panelCount: report.panelCount,
     systemSizeKw: report.systemSizeKw,
     panelSpec,
@@ -70,5 +77,6 @@ export function hydrateReportData(report: ReportWithConfig): ReportData {
     model3dImageUrl: report.model3dImageUrl,
     pdfUrl: report.pdfUrl,
     quote,
+    dataConfidence,
   }
 }

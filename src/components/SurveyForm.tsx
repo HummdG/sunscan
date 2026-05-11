@@ -9,7 +9,8 @@ import { BillUpload } from './BillUpload'
 import { AssumptionsPanel } from './AssumptionsPanel'
 import { SolarRoofViewer } from './SolarRoofViewer'
 import { TierSelectStep } from './TierSelectStep'
-import { Sun, FileText, Loader2, CheckCircle2, ChevronRight, ChevronLeft, AlertTriangle, ListChecks, MapPin } from 'lucide-react'
+import { ReviewStep, isReviewReady, computeDataConfidence } from './ReviewStep'
+import { Sun, FileText, Loader2, CheckCircle2, ChevronRight, ChevronLeft, AlertTriangle, ListChecks, MapPin, ShieldCheck } from 'lucide-react'
 import type {
   OsAddress,
   OsBuilding,
@@ -40,6 +41,7 @@ const DEFAULT_BILL: BillData = {
 const STEPS = [
   { label: 'Address', code: 'INTAKE', accent: 'var(--ss-blue)', icon: MapPin },
   { label: 'Energy Bill', code: 'TARIFF', accent: 'var(--ss-amber)', icon: FileText },
+  { label: 'Review', code: 'VERIFY', accent: 'var(--ss-amber)', icon: ShieldCheck },
   { label: 'Choose System', code: 'CONFIG', accent: 'var(--ss-violet-l)', icon: ListChecks },
   { label: 'Your Report', code: 'EXPORT', accent: 'var(--ss-green)', icon: Sun },
 ]
@@ -47,7 +49,7 @@ const STEPS = [
 // ─── Engineering stage strip — replaces the generic Progress bar ──────────────
 function StageStrip({ step }: { step: number }) {
   return (
-    <ol className="grid grid-cols-2 md:grid-cols-4 gap-x-3 gap-y-4">
+    <ol className="grid grid-cols-2 md:grid-cols-5 gap-x-3 gap-y-4">
       {STEPS.map((s, i) => {
         const state = i < step ? 'done' : i === step ? 'active' : 'upcoming'
         const accent =
@@ -162,7 +164,7 @@ function LiveSpec({
       ],
     },
     {
-      num: '04', code: 'SYSTEM', stage: 2, done: !!selectedPreset,
+      num: '04', code: 'SYSTEM', stage: 3, done: !!selectedPreset,
       rows: [
         { k: 'Tier', v: selectedPreset ? selectedPreset.tier.charAt(0).toUpperCase() + selectedPreset.tier.slice(1) : null },
         { k: 'Panels', v: selectedPreset ? String(selectedPreset.panelCount) : null },
@@ -345,7 +347,7 @@ export function SurveyForm() {
       setTierPresets(result.presets)
       // Default-select Standard
       setSelectedTier('standard')
-      setStep(2)
+      setStep(3)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not load system options')
     } finally {
@@ -426,9 +428,17 @@ export function SurveyForm() {
       return
     }
 
+    if (!isReviewReady({ osBuilding, solarInsights, assumptions, bill: billData })) {
+      setError('Please confirm your roof and consumption on the Review step before generating.')
+      setStep(2)
+      return
+    }
+
+    const dataConfidence = computeDataConfidence({ osBuilding, solarInsights, bill: billData })
+
     setGenerating(true)
     setError(null)
-    setStep(3)
+    setStep(4)
 
     try {
       const payload = {
@@ -445,13 +455,14 @@ export function SurveyForm() {
         tariffPencePerKwh: billData.tariffPencePerKwh,
         standingChargePencePerDay: billData.standingChargePencePerDay,
         exportTariffPencePerKwh: billData.exportTariffPencePerKwh,
-        billSource: billData.source,
+        billSource: billData.source === 'default' ? 'manual' : billData.source,
         assumptions,
         solarApiJson: solarInsights ? JSON.stringify(solarInsights) : undefined,
         model3dImageBase64: capturedModel3dRef.current ?? undefined,
         chartImagesBase64: [],
         selectedTier,
         selectedConfig: presetConfig,
+        dataConfidence,
       }
 
       const res = await fetch('/api/report/generate', {
@@ -467,7 +478,7 @@ export function SurveyForm() {
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Something went wrong')
       setGenerating(false)
-      setStep(2)
+      setStep(3)
     }
   }
 
@@ -652,8 +663,54 @@ export function SurveyForm() {
                   <ChevronLeft className="h-4 w-4" /> Back
                 </Button>
                 <Button
+                  onClick={() => setStep(2)}
+                  className="ss-heading gap-2 px-5 py-5 text-[15px]"
+                  style={brandBtn}
+                >
+                  Next · Review <ChevronRight className="h-4 w-4" />
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {/* Step 2: Review */}
+          {step === 2 && (
+            <div className="space-y-6">
+              <ReviewStep
+                osBuilding={osBuilding}
+                solarInsights={solarInsights}
+                assumptions={assumptions}
+                bill={billData}
+                onAssumptionsChange={setAssumptions}
+                onBillChange={setBillData}
+              />
+
+              {error && (
+                <div
+                  className="p-3 text-sm"
+                  style={{
+                    background: 'rgba(176,64,32,0.10)',
+                    border: '1px solid var(--ss-border-h)',
+                    color: 'var(--ss-blue)',
+                    borderRadius: 4,
+                  }}
+                >
+                  {error}
+                </div>
+              )}
+
+              <div className="flex justify-between pt-2">
+                <Button
+                  variant="outline"
+                  onClick={() => setStep(1)}
+                  className="ss-heading gap-2 px-5 py-5 text-[15px]"
+                  style={ghostBtn}
+                >
+                  <ChevronLeft className="h-4 w-4" /> Back
+                </Button>
+                <Button
                   onClick={handleLoadTiers}
-                  disabled={loadingTiers}
+                  disabled={loadingTiers || !isReviewReady({ osBuilding, solarInsights, assumptions, bill: billData })}
                   className="ss-heading gap-2 px-5 py-5 text-[15px]"
                   style={brandBtn}
                 >
@@ -663,7 +720,7 @@ export function SurveyForm() {
                     </>
                   ) : (
                     <>
-                      Next · Choose System <ChevronRight className="h-4 w-4" />
+                      Confirm &amp; Choose System <ChevronRight className="h-4 w-4" />
                     </>
                   )}
                 </Button>
@@ -671,8 +728,8 @@ export function SurveyForm() {
             </div>
           )}
 
-          {/* Step 2: Tier select */}
-          {step === 2 && (
+          {/* Step 3: Tier select */}
+          {step === 3 && (
             <div className="space-y-6">
               <div>
                 <h2
@@ -711,7 +768,7 @@ export function SurveyForm() {
               <div className="flex justify-between pt-2">
                 <Button
                   variant="outline"
-                  onClick={() => setStep(1)}
+                  onClick={() => setStep(2)}
                   className="ss-heading gap-2 px-5 py-5 text-[15px]"
                   style={ghostBtn}
                 >
@@ -729,8 +786,8 @@ export function SurveyForm() {
             </div>
           )}
 
-          {/* Step 3: Generating */}
-          {step === 3 && (
+          {/* Step 4: Generating */}
+          {step === 4 && (
             <div className="text-center space-y-6 py-16 flex-1 flex flex-col items-center justify-center">
               <div
                 className="h-20 w-20 rounded-full flex items-center justify-center"

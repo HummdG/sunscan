@@ -1,99 +1,116 @@
-import OpenAI from 'openai'
+import { Mistral } from '@mistralai/mistralai'
 import type { ParsedBill } from './types'
 
-const client = process.env.OPENAI_API_KEY
-  ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
-  : null
+const apiKey = process.env.MISTRAL_API_KEY
+const client = apiKey ? new Mistral({ apiKey }) : null
 
-const BILL_PARSE_PROMPT = `You are an expert at reading UK residential electricity bills.
-Extract the following fields from the provided bill image or document.
-Return ONLY valid JSON with exactly these keys (use null for missing values):
-
-{
-  "annualKwh": number or null,        // annual electricity usage in kWh
-  "tariffPencePerKwh": number or null, // unit rate in pence per kWh
-  "standingChargePencePerDay": number or null, // daily standing charge in pence
-  "exportTariffPencePerKwh": number or null    // export/SEG rate in pence per kWh (often absent)
+export class BillOcrUnavailableError extends Error {
+  constructor() {
+    super('Bill OCR is not configured (MISTRAL_API_KEY missing)')
+    this.name = 'BillOcrUnavailableError'
+  }
 }
 
-If you see a period usage (e.g. quarterly), extrapolate to annual.
-All values should be numbers only, no units in the JSON.`
+const EXTRACTION_PROMPT = `You are extracting key fields from a UK residential electricity bill whose page contents have already been OCR-transcribed to markdown below.
+
+Return ONLY a JSON object with these four keys (use null when a value is not clearly visible):
+{
+  "annualKwh": number | null,                   // annual electricity usage in kWh. If a quarterly figure is given, multiply by 4. If a monthly figure, multiply by 12.
+  "tariffPencePerKwh": number | null,           // unit rate in pence per kWh
+  "standingChargePencePerDay": number | null,   // daily standing charge in pence
+  "exportTariffPencePerKwh": number | null      // SEG / export rate in pence per kWh (often absent)
+}
+
+Be conservative: if a number could be the wrong field, return null. Do not invent values.
+
+OCR text:
+---
+{TEXT}
+---`
 
 /**
- * Parse an electricity bill (PDF or image) using OpenAI GPT-4o vision.
- * Returns null if extraction fails or confidence is too low.
+ * Parse an electricity bill (PDF or image) using Mistral OCR + Mistral chat for extraction.
+ * Throws BillOcrUnavailableError if MISTRAL_API_KEY is not configured.
+ * Returns null if OCR or extraction fails or the required fields can't be found.
  */
-export async function parseBillWithOpenAI(
-  buffer: Buffer,
-  mimeType: string,
-): Promise<ParsedBill | null> {
-  if (!client) {
-    console.warn('OPENAI_API_KEY not set — returning mock bill data')
-    return mockParseBill()
+export async function parseBill(buffer: Buffer, mimeType: string): Promise<ParsedBill | null> {
+  if (!client) throw new BillOcrUnavailableError()
+
+  const base64 = buffer.toString('base64')
+  const dataUri = `data:${mimeType};base64,${base64}`
+  const isImage = mimeType.startsWith('image/')
+
+  let ocrText = ''
+  try {
+    const ocrResponse = await client.ocr.process({
+      model: 'mistral-ocr-latest',
+      document: isImage
+        ? { type: 'image_url', imageUrl: dataUri }
+        : { type: 'document_url', documentUrl: dataUri },
+    })
+    ocrText = (ocrResponse.pages ?? []).map((p) => p.markdown ?? '').join('\n\n').trim()
+  } catch (err) {
+    console.error('Mistral OCR failed:', err)
+    return null
   }
 
+  if (!ocrText) {
+    console.warn('Mistral OCR returned empty text')
+    return null
+  }
+
+  // Mistral OCR has a per-page page limit; we cap the prompt to a safe length.
+  const truncated = ocrText.slice(0, 12000)
+
+  let extracted: {
+    annualKwh: unknown
+    tariffPencePerKwh: unknown
+    standingChargePencePerDay: unknown
+    exportTariffPencePerKwh: unknown
+  }
   try {
-    // OpenAI vision accepts base64-encoded images
-    // For PDFs, we pass as-is if the model supports it, else return null
-    if (mimeType === 'application/pdf') {
-      // GPT-4o does not natively parse PDFs — return null to trigger manual entry
-      // TODO: Convert PDF page 1 to PNG using pdf2pic or similar, then retry
-      console.warn('PDF bill upload — OCR not yet implemented for PDF, requesting manual entry')
-      return null
-    }
-
-    const base64 = buffer.toString('base64')
-    const imageUrl = `data:${mimeType};base64,${base64}`
-
-    const response = await client.chat.completions.create({
-      model: 'gpt-4o',
-      messages: [
-        {
-          role: 'user',
-          content: [
-            { type: 'text', text: BILL_PARSE_PROMPT },
-            { type: 'image_url', image_url: { url: imageUrl, detail: 'high' } },
-          ],
-        },
-      ],
-      max_tokens: 300,
+    const completion = await client.chat.complete({
+      model: 'mistral-small-latest',
+      messages: [{ role: 'user', content: EXTRACTION_PROMPT.replace('{TEXT}', truncated) }],
+      responseFormat: { type: 'json_object' },
       temperature: 0,
     })
-
-    const text = response.choices[0]?.message?.content?.trim() ?? ''
-    // Strip markdown code fences if present
-    const json = text.replace(/^```json?\s*/i, '').replace(/\s*```$/, '').trim()
-    const parsed = JSON.parse(json)
-
-    const annualKwh = parsed.annualKwh != null ? Number(parsed.annualKwh) : null
-    const tariff = parsed.tariffPencePerKwh != null ? Number(parsed.tariffPencePerKwh) : null
-
-    if (!annualKwh || !tariff) return null
-
-    const allPresent = annualKwh > 0 && tariff > 0
-    return {
-      annualKwh,
-      tariffPencePerKwh: tariff,
-      standingChargePencePerDay: parsed.standingChargePencePerDay != null
-        ? Number(parsed.standingChargePencePerDay)
-        : 53,
-      exportTariffPencePerKwh: parsed.exportTariffPencePerKwh != null
-        ? Number(parsed.exportTariffPencePerKwh)
-        : 15,
-      confidence: allPresent ? 'high' : 'medium',
-    }
+    const raw = completion.choices?.[0]?.message?.content ?? ''
+    const text = typeof raw === 'string'
+      ? raw
+      : Array.isArray(raw)
+        ? raw.map((c) => ('text' in c ? c.text : '')).join('')
+        : ''
+    extracted = JSON.parse(text)
   } catch (err) {
-    console.error('Bill parse error:', err)
+    console.error('Mistral extraction failed:', err)
     return null
+  }
+
+  const annualKwh = toFiniteNumber(extracted.annualKwh)
+  const tariff = toFiniteNumber(extracted.tariffPencePerKwh)
+  const standingCharge = toFiniteNumber(extracted.standingChargePencePerDay)
+  const exportTariff = toFiniteNumber(extracted.exportTariffPencePerKwh)
+
+  // The two fields that drive the proposal: kWh and unit rate. Without both, we don't trust it.
+  if (annualKwh === null || annualKwh <= 0) return null
+  if (tariff === null || tariff <= 0) return null
+
+  const supportingFieldsPresent = [standingCharge !== null, exportTariff !== null].filter(Boolean).length
+  const confidence: 'high' | 'medium' | 'low' =
+    supportingFieldsPresent === 2 ? 'high' : supportingFieldsPresent === 1 ? 'medium' : 'low'
+
+  return {
+    annualKwh,
+    tariffPencePerKwh: tariff,
+    standingChargePencePerDay: standingCharge ?? 53,
+    exportTariffPencePerKwh: exportTariff ?? 15,
+    confidence,
   }
 }
 
-function mockParseBill(): ParsedBill {
-  return {
-    annualKwh: 3850,
-    tariffPencePerKwh: 24.5,
-    standingChargePencePerDay: 53,
-    exportTariffPencePerKwh: 15,
-    confidence: 'medium',
-  }
+function toFiniteNumber(val: unknown): number | null {
+  if (val === null || val === undefined || val === '') return null
+  const n = Number(val)
+  return Number.isFinite(n) ? n : null
 }
