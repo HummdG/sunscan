@@ -737,6 +737,9 @@ function Scene({ insights, mode, captureRef, showLabels, dsm, lat, lng, mapsKey,
   // Google Solar DSM heightmap when the tiles API key is missing or DSM is the
   // only thing available for the address.
   const [tilesAvailable, setTilesAvailable] = useState(true)
+  const handleTilesUnavailable = useCallback(() => {
+    setTilesAvailable(false)
+  }, [])
   const useGoogleTiles = !!mapsKey && tilesAvailable
   const useDsmMesh = (!useGoogleTiles && !!dsm) || (!tilesAvailable && !!dsm)
 
@@ -770,7 +773,7 @@ function Scene({ insights, mode, captureRef, showLabels, dsm, lat, lng, mapsKey,
             lng={lng}
             groundAlt={groundAlt}
             apiKey={mapsKey!}
-            onUnavailable={() => setTilesAvailable(false)}
+            onUnavailable={handleTilesUnavailable}
           />
           {showLabels && geos.map((g, i) => <SegmentLabel key={i} geo={g} />)}
           {mode === 'panels' && panelConfig && (
