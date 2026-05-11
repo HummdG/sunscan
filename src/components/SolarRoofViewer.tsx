@@ -735,8 +735,12 @@ function Scene({ insights, mode, captureRef, showLabels, dsm, lat, lng, mapsKey,
   const useGoogleTiles = !!mapsKey
   const useDsmMesh = !useGoogleTiles && !!dsm
 
-  const GEOID_UK = 47
-  const groundAlt = (dsm?.minElev ?? 0) + GEOID_UK
+  const GEOID_UK = 47  // UK geoid offset (EGM2008 → WGS84 ellipsoid)
+  // Anchor on Google Solar's reported eave heights when DSM isn't loaded
+  // yet, so the tiles ground plane and segment overlays sit in the same
+  // frame from the first mount.
+  const minSegEave = geos.length ? Math.min(...geos.map(g => g.eaveHeight)) : 0
+  const groundAlt = (dsm?.minElev ?? Math.max(0, minSegEave - 3)) + GEOID_UK
 
   void sunMin; void sunMax; void minEave
 
