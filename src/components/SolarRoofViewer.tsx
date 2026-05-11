@@ -1330,34 +1330,34 @@ export function SolarRoofViewer({ insights, dataLayers, lat, lng, osBuilding, on
             Drag to rotate · Scroll to zoom
           </div>
 
-          {/* Data source selector */}
-          <div className="absolute top-10 left-3 flex gap-1">
-            {(['lidar', 'solar', 'os_ngd'] as ViewSource[]).map(src => {
-              const label = src === 'lidar' ? 'LiDAR' : src === 'solar' ? 'Solar' : 'OS NGD'
-              const available = src === 'lidar' ? lidar.planes.length >= 1
-                : src === 'solar' ? solar3DModel.segments.length > 0
-                : !!osBuilding
-              const lidarUnavailableReason = src === 'lidar' && !available && !lidar.loading
-                ? (lidar.reason === 'error' ? 'err' : 'n/a')
-                : null
-              return (
-                <button
-                  key={src}
-                  onClick={() => { if (available) setViewSource(src) }}
-                  title={src === 'lidar' && lidar.reason === 'no_coverage' ? 'EA LiDAR has no coverage for this location' : undefined}
-                  className={`text-[10px] px-2 py-0.5 rounded border transition-colors ${
-                    viewSource === src
-                      ? 'bg-white text-slate-800 border-white font-semibold shadow'
-                      : !available
-                      ? 'bg-black/10 text-white/30 border-white/15 cursor-not-allowed'
-                      : 'bg-black/25 text-white/75 border-white/30 hover:bg-black/35'
-                  }`}
-                >
-                  {label}{src === 'lidar' && lidar.loading ? ' …' : ''}{lidarUnavailableReason ? ` (${lidarUnavailableReason})` : ''}
-                </button>
-              )
-            })}
-          </div>
+          {/* Data source selector — legacy fallback only when Photorealistic
+              Tiles isn't available. With tiles active, the tiles themselves
+              are the source, so the user has nothing to switch between. */}
+          {!mapsKey && (
+            <div className="absolute top-10 left-3 flex gap-1">
+              {(['lidar', 'solar', 'os_ngd'] as ViewSource[]).map(src => {
+                const label = src === 'lidar' ? 'LiDAR' : src === 'solar' ? 'Solar' : 'OS NGD'
+                const available = src === 'lidar' ? lidar.planes.length >= 1
+                  : src === 'solar' ? solar3DModel.segments.length > 0
+                  : !!osBuilding
+                return (
+                  <button
+                    key={src}
+                    onClick={() => { if (available) setViewSource(src) }}
+                    className={`text-[10px] px-2 py-0.5 rounded border transition-colors ${
+                      viewSource === src
+                        ? 'bg-white text-slate-800 border-white font-semibold shadow'
+                        : !available
+                        ? 'bg-black/10 text-white/30 border-white/15 cursor-not-allowed'
+                        : 'bg-black/25 text-white/75 border-white/30 hover:bg-black/35'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                )
+              })}
+            </div>
+          )}
 
           <button
             onClick={() => setShowLabels(p => !p)}
