@@ -8,7 +8,7 @@ import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Button } from '@/components/ui/button'
 import { Camera, AlertTriangle } from 'lucide-react'
-import { wgs84ToLocalMetres } from '@/lib/geometry'
+import { wgs84ToLocalMetres, compassToMcsOrientation } from '@/lib/geometry'
 import { TilesRenderer, WGS84_ELLIPSOID } from '3d-tiles-renderer'
 import { GoogleCloudAuthPlugin } from '3d-tiles-renderer/plugins'
 import type {
@@ -941,7 +941,15 @@ export function SolarRoofViewer({
         fd.append('right', specInputs.right.blob, 'right.png')
         fd.append('back', specInputs.back.blob, 'back.png')
         fd.append('footprint', JSON.stringify(osBuilding.footprintPolygon))
-        fd.append('roofSegments', JSON.stringify(osBuilding.roofSegments ?? []))
+        fd.append('roofSegments', JSON.stringify(
+          (insights.solarPotential.roofSegmentStats ?? []).map((s) => ({
+            pitchDeg: s.pitchDegrees,
+            azimuthDeg: compassToMcsOrientation(s.azimuthDegrees),
+            areaM2: s.stats.areaMeters2,
+            centerLng: s.center.longitude,
+            centerLat: s.center.latitude,
+          }))
+        ))
         fd.append('eaveHeightM', String(osBuilding.eaveHeightM ?? 5.8))
         fd.append('dimensionsM', JSON.stringify(specInputs.dimensionsM))
 

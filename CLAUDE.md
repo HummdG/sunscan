@@ -18,7 +18,7 @@ npx prisma generate                    # Regenerate Prisma client after schema c
 npx prisma studio                      # Browse DB in browser
 ```
 
-No test suite exists yet.
+Run `npm test` for unit tests (Vitest; pure-function modules only).
 
 ## Architecture
 
