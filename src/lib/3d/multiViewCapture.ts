@@ -80,10 +80,36 @@ export async function captureOrbit(
         renderer.setRenderTarget(rt)
         renderer.clear(true, true, true)
         renderer.render(scene, cam)
+
+        // Read back pixels to CPU so the texture is portable to other renderers.
+        // Render-target textures live on the GPU of a specific WebGLRenderer; once
+        // that renderer is disposed (tileScene.dispose() in the finally block of
+        // reconstructBuilding) the texture data is gone. DataTexture carries a CPU
+        // copy and re-uploads to whichever renderer uses it first.
+        const pixels = new Uint8Array(size * size * 4)
+        renderer.readRenderTargetPixels(rt, 0, 0, size, size, pixels)
+
         renderer.setRenderTarget(null)
 
+        // OpenGL framebuffers are bottom-up; flip Y so the DataTexture displays
+        // right-way-up when sampled with standard UV coordinates.
+        const flipped = new Uint8Array(pixels.length)
+        const stride = size * 4
+        for (let y = 0; y < size; y++) {
+          const srcRow = (size - 1 - y) * stride
+          const dstRow = y * stride
+          flipped.set(pixels.subarray(srcRow, srcRow + stride), dstRow)
+        }
+
+        const dataTex = new THREE.DataTexture(flipped, size, size, THREE.RGBAFormat)
+        dataTex.colorSpace = THREE.SRGBColorSpace
+        dataTex.needsUpdate = true
+
+        // Free the GPU render target now that we have a CPU copy.
+        rt.dispose()
+
         captures.push({
-          texture: rt.texture,
+          texture: dataTex,
           position: cam.position.clone(),
           viewMatrix: cam.matrixWorldInverse.clone(),
           projectionMatrix: cam.projectionMatrix.clone(),
