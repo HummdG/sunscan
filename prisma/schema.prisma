@@ -42,6 +42,7 @@ model Report {
   assumptionsJson           String
   panelLayoutJson           String   @default("[]")
   model3dImageUrl           String?
+  reconstructedModelUrl     String?
   pdfUrl                    String?
   status                    String   @default("draft")
   solarApiJson              String?
