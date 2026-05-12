@@ -1084,48 +1084,48 @@ export function SolarRoofViewer({
         style={{ height: 380, background: '#243A2E' }}
       >
 
-        {/* 3D Canvas — always mounted to preserve orbit state */}
+        {/* 3D Canvas — always mounted to preserve orbit state.
+            On the '3D Model' tab, if a reconstructed model is available it
+            becomes the sole visualization; the live tile Canvas is hidden so
+            the two scenes cannot overlap. */}
         <div
           className="absolute inset-0"
           style={{ display: is3d ? 'block' : 'none' }}
         >
-          <Suspense
-            fallback={
-              <div className="w-full h-full flex items-center justify-center">
-                <Skeleton className="w-full h-full" />
-              </div>
-            }
-          >
-            <Canvas
-              shadows
-              camera={{ position: camPos, fov: 45 }}
-              gl={{ preserveDrawingBuffer: true, antialias: true }}
+          {tab === '3d' && reconstructedSource ? (
+            /* ── Reconstructed model (Level 3+ spec-driven pipeline) ──────── */
+            <ReconstructedModelView
+              source={reconstructedSource}
+              onCapture={onCapture}
+              height={380}
+            />
+          ) : (
+            /* ── Live tile / DSM scene ──────────────────────────────────────── */
+            <Suspense
+              fallback={
+                <div className="w-full h-full flex items-center justify-center">
+                  <Skeleton className="w-full h-full" />
+                </div>
+              }
             >
-              <Scene
-                insights={insights}
-                mode={tab === 'panels' ? 'panels' : tab === 'heatmap' ? 'heatmap' : 'model'}
-                captureRef={captureRef}
-                showLabels={showLabels && (tab === '3d' || tab === 'panels')}
-                dsm={dsm}
-                lat={lat}
-                lng={lng}
-                mapsKey={mapsKey}
-                solar3DModel={solar3DModel}
-              />
-            </Canvas>
-          </Suspense>
-
-          {/* Reconstructed model overlay (Level 3+ spec-driven pipeline).
-              Only on the '3D Model' tab — heatmap/panels rely on the segment
-              overlays drawn by Scene. */}
-          {tab === '3d' && reconstructedSource && (
-            <div className="absolute inset-0 z-10">
-              <ReconstructedModelView
-                source={reconstructedSource}
-                onCapture={onCapture}
-                height={380}
-              />
-            </div>
+              <Canvas
+                shadows
+                camera={{ position: camPos, fov: 45 }}
+                gl={{ preserveDrawingBuffer: true, antialias: true }}
+              >
+                <Scene
+                  insights={insights}
+                  mode={tab === 'panels' ? 'panels' : tab === 'heatmap' ? 'heatmap' : 'model'}
+                  captureRef={captureRef}
+                  showLabels={showLabels && (tab === '3d' || tab === 'panels')}
+                  dsm={dsm}
+                  lat={lat}
+                  lng={lng}
+                  mapsKey={mapsKey}
+                  solar3DModel={solar3DModel}
+                />
+              </Canvas>
+            </Suspense>
           )}
 
           {/* 3D overlays */}
