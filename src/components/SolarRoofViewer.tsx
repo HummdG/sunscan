@@ -21,6 +21,24 @@ import { SolarPanelMesh } from '@/components/solar/SolarPanelMesh'
 import { buildSolar3DModel, DEFAULT_WALL_HEIGHT_M } from '@/lib/solar/solarApiMapper'
 import { computePanelLayouts } from '@/lib/solar/panelPlacementService'
 import type { PanelLayout, Solar3DModel } from '@/types/solar'
+import { reconstructBuilding, type ReconstructionProgress } from '@/lib/3d/buildingExtractor'
+import { renderSpec } from '@/lib/3d/specRenderer'
+import { projectTextures } from '@/lib/3d/specTextureProjector'
+import { exportGLB } from '@/lib/3d/glbExporter'
+import type { BuildingSpec } from '@/lib/3d/buildingSpec'
+import { ReconstructedModelView } from '@/components/solar/ReconstructedModelView'
+
+// ─── Reconstruction helpers ───────────────────────────────────────────────────
+
+async function persistGlb(reportId: string, glb: Blob, signal: AbortSignal): Promise<void> {
+  try {
+    const fd = new FormData()
+    fd.append('glb', glb, 'reconstruction.glb')
+    await fetch(`/api/report/${reportId}/reconstruction`, { method: 'POST', body: fd, signal })
+  } catch (e) {
+    if ((e as Error).name !== 'AbortError') console.warn('Persist GLB failed', e)
+  }
+}
 
 // ─── Geometry helpers ─────────────────────────────────────────────────────────
 
@@ -823,20 +841,181 @@ export interface SolarRoofViewerProps {
   lng: number
   osBuilding?: OsBuilding | null
   onCapture?: (dataUrl: string) => void
+  /** When provided, a successful spec-driven reconstruction will be persisted
+   *  against this report id and an optimistic preview is shown while it runs. */
+  reportId?: string
+  /** Pre-existing reconstructed GLB URL; shown immediately if provided. */
+  reconstructedModelUrl?: string | null
 }
 
 type ViewTab = '3d' | 'heatmap' | 'panels' | 'satellite' | 'geotiff'
 
-export function SolarRoofViewer({ insights, dataLayers, lat, lng, osBuilding, onCapture }: SolarRoofViewerProps) {
+export function SolarRoofViewer({
+  insights,
+  dataLayers,
+  lat,
+  lng,
+  osBuilding,
+  onCapture,
+  reportId,
+  reconstructedModelUrl,
+}: SolarRoofViewerProps) {
   const [tab, setTab] = useState<ViewTab>('3d')
   const [showLabels, setShowLabels] = useState(true)
   const captureRef = useRef<(() => Promise<string>) | null>(null)
   const mapsKey = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY
 
+  // Reconstruction state (Levels 0-5 spec-driven pipeline)
+  const [reconstructedSource, setReconstructedSource] = useState<Blob | string | null>(
+    reconstructedModelUrl ?? null,
+  )
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const [reconProgress, setReconProgress] = useState<ReconstructionProgress | null>(null)
+  const reconAbortRef = useRef<AbortController | null>(null)
+
   const { dsm } = useDsm(dataLayers?.dsmId)
   // Bug 2 fix: anchor roof heights to OS eave height rather than hardcoded 3.5m
   const wallH = osBuilding?.eaveHeightM ?? DEFAULT_WALL_HEIGHT_M
   const solar3DModel = useMemo(() => buildSolar3DModel(insights, wallH), [insights, wallH])
+
+  // Ground altitude above the WGS84 ellipsoid at the building. Mirrors the
+  // derivation Scene uses internally for the photoreal tile transform: prefer
+  // the DSM's minimum elevation, fall back to the lowest reported Google Solar
+  // eave (minus a small margin) or a UK low-lying baseline. Apply the EGM2008
+  // geoid offset (≈47m for the UK) to land in ellipsoidal coordinates.
+  const GEOID_UK = 47
+  const groundAltMetres = useMemo(() => {
+    if (dsm) return dsm.minElev + GEOID_UK
+    const segs = insights.solarPotential.roofSegmentStats ?? []
+    if (segs.length) {
+      const minSegEave = Math.min(...segs.map((s) => s.planeHeightAtCenterMeters))
+      return Math.max(0, minSegEave - 3) + GEOID_UK
+    }
+    return GEOID_UK
+  }, [dsm, insights])
+
+  // ── Spec-driven reconstruction pipeline (Levels 0-5) ────────────────────────
+  // Runs once an OS footprint + a Google Maps API key are available. Produces:
+  //   Level 3 (optimistic): cropped tile mesh shown immediately.
+  //   Level 5 (eventual):   spec-rendered procedural mesh, optionally textured
+  //                         by re-projecting the cardinal-view captures.
+  // Aborts on prop change / unmount; never throws past the effect boundary.
+  useEffect(() => {
+    if (!lat || !lng || !osBuilding?.footprintPolygon || !mapsKey) return
+    if (reconstructedModelUrl) return  // already have a persisted model
+
+    const ctl = new AbortController()
+    reconAbortRef.current = ctl
+
+    ;(async () => {
+      try {
+        // PHASE 1: tile capture + photos
+        const captureResult = await reconstructBuilding({
+          lat,
+          lng,
+          footprintPolygon: osBuilding.footprintPolygon,
+          eaveHeightM: osBuilding.eaveHeightM ?? 5.8,
+          groundAltMetres,
+          apiKey: mapsKey,
+          rebakeTextures: false,
+          produceSpecInputs: true,
+          signal: ctl.signal,
+          onProgress: (p) => setReconProgress(p),
+        })
+
+        // Optimistic Level 3 preview: cropped tile mesh while spec runs.
+        setReconstructedSource(captureResult.glb)
+
+        if (!captureResult.specInputs) {
+          console.warn('[recon] no spec inputs; staying on cropped tile mesh')
+          if (reportId) persistGlb(reportId, captureResult.glb, ctl.signal)
+          return
+        }
+
+        // PHASE 2: spec generation
+        const specInputs = captureResult.specInputs
+        const specPathId = reportId ?? `scratch-${Date.now()}`
+
+        const fd = new FormData()
+        fd.append('front', specInputs.front.blob, 'front.png')
+        fd.append('right', specInputs.right.blob, 'right.png')
+        fd.append('back', specInputs.back.blob, 'back.png')
+        fd.append('footprint', JSON.stringify(osBuilding.footprintPolygon))
+        fd.append('roofSegments', JSON.stringify(osBuilding.roofSegments ?? []))
+        fd.append('eaveHeightM', String(osBuilding.eaveHeightM ?? 5.8))
+        fd.append('dimensionsM', JSON.stringify(specInputs.dimensionsM))
+
+        let spec: BuildingSpec
+        try {
+          const resp = await fetch(`/api/report/${specPathId}/reconstruction/spec`, {
+            method: 'POST',
+            body: fd,
+            signal: ctl.signal,
+          })
+          if (!resp.ok) throw new Error(`spec endpoint returned ${resp.status}`)
+          const json = await resp.json()
+          spec = json.spec as BuildingSpec
+          console.debug('[recon] spec generated', {
+            source: json.source,
+            cached: json.cached,
+            confidence: spec.confidence,
+          })
+        } catch (e) {
+          if ((e as Error).name === 'AbortError') throw e
+          console.warn('[recon] spec call failed, staying on cropped tile mesh', e)
+          if (reportId) persistGlb(reportId, captureResult.glb, ctl.signal)
+          return
+        }
+
+        // PHASE 3+4: render + texture project
+        const footprintLocal = wgs84ToLocalMetres(osBuilding.footprintPolygon, [lng, lat])
+        const rendered = renderSpec({ spec, footprintLocal })
+
+        const projCanvas = document.createElement('canvas')
+        projCanvas.width = 2048
+        projCanvas.height = 2048
+        const projRenderer = new THREE.WebGLRenderer({
+          canvas: projCanvas,
+          preserveDrawingBuffer: true,
+          antialias: false,
+        })
+
+        try {
+          projectTextures({
+            group: rendered.group,
+            captures: [
+              specInputs.front.capture,
+              specInputs.right.capture,
+              specInputs.back.capture,
+              specInputs.left.capture,
+            ],
+            maskGeometry: captureResult.croppedGeometry,
+            renderer: projRenderer,
+            atlasSize: 2048,
+          })
+        } catch (e) {
+          if ((e as Error).name === 'AbortError') throw e
+          console.warn('[recon] texture projection failed; keeping flat materials', e)
+        } finally {
+          projRenderer.dispose()
+        }
+
+        // PHASE 5: export & persist
+        const exportRoot = new THREE.Group()
+        exportRoot.add(rendered.group)
+        const glb = await exportGLB(exportRoot)
+        if (ctl.signal.aborted) return
+
+        setReconstructedSource(glb)
+        if (reportId) persistGlb(reportId, glb, ctl.signal)
+      } catch (e) {
+        if ((e as Error).name === 'AbortError') return
+        console.error('[recon] reconstruction pipeline failed', e)
+      }
+    })()
+
+    return () => { ctl.abort() }
+  }, [lat, lng, osBuilding, groundAltMetres, mapsKey, reportId, reconstructedModelUrl])
 
   const segs = insights.solarPotential.roofSegmentStats ?? []
   const geos = segs.map(s => computeSegmentGeo(s, insights.center))
@@ -927,6 +1106,19 @@ export function SolarRoofViewer({ insights, dataLayers, lat, lng, osBuilding, on
               />
             </Canvas>
           </Suspense>
+
+          {/* Reconstructed model overlay (Level 3+ spec-driven pipeline).
+              Only on the '3D Model' tab — heatmap/panels rely on the segment
+              overlays drawn by Scene. */}
+          {tab === '3d' && reconstructedSource && (
+            <div className="absolute inset-0 z-10">
+              <ReconstructedModelView
+                source={reconstructedSource}
+                onCapture={onCapture}
+                height={380}
+              />
+            </div>
+          )}
 
           {/* 3D overlays */}
           {tab === 'heatmap' ? (
