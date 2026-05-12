@@ -5,14 +5,11 @@ import { createOffscreenTileScene } from './offscreenTileScene'
 import { captureOrbit, type CapturedView } from './multiViewCapture'
 import { rebakeTextures } from './textureRebaker'
 import { exportGLB } from './glbExporter'
-import { isolateBuilding } from './buildingMasker'
-
 export type ReconstructionPhase =
   | 'init'
   | 'loading-tiles'
   | 'capturing-views'
   | 'extracting-geometry'
-  | 'isolating-views'
   | 'rebaking-textures'
   | 'exporting'
   | 'ml-reconstruction'
@@ -47,10 +44,9 @@ export interface ReconstructionInput {
   /** Whether to run the texture re-bake step (Approach 2); default true */
   rebakeTextures?: boolean
   /**
-   * Whether to also produce isolated single-building PNG views suitable for
-   * feeding into a cloud image-to-3D model (Hunyuan3D-2 multi-view). Adds
-   * an `isolating-views` phase that picks 4 cardinal captures and masks
-   * everything except the target building. Default: false.
+   * Whether to also produce cardinal PNG views (front/right/back/left) for
+   * feeding into the spec-generation pipeline. Adds a second 4-shot orbit
+   * at building mid-height with a wider FOV and closer radius. Default: false.
    */
   produceSpecInputs?: boolean
   onProgress?: (p: ReconstructionProgress) => void
@@ -89,7 +85,6 @@ const PHASE_WEIGHTS: Record<ReconstructionPhase, number> = {
   'loading-tiles': 0.30,
   'capturing-views': 0.20,
   'extracting-geometry': 0.05,
-  'isolating-views': 0.10,
   'rebaking-textures': 0.20,
   exporting: 0.05,
   // Caller-emitted phases (not used inside reconstructBuilding's cumulative
@@ -296,17 +291,16 @@ export async function reconstructBuilding(input: ReconstructionInput): Promise<R
     // codebase for future use once the rebake pipeline supports per-group
     // re-baking with proper UV unwrap.
 
-    // ─── 3b. Dedicated spec capture pass + isolation (v3) ───────────────────
+    // ─── 3b. Dedicated spec capture pass (v3) ──────────────────────────────
     // The 48-view orbit above is tuned for texture re-bake (broad viewpoint
-    // diversity, all from aerial altitudes). Hunyuan3D-2 multi-view instead
-    // wants near-horizontal "drone-eye" framing where the building's walls
-    // fill the centre of the frame. Re-using the rebake captures fed it
-    // roof-from-above shots and Hunyuan dutifully returned a roof-shaped
-    // slab. Solution: a second 4-shot orbit at building mid-height with a
-    // wider FOV and closer radius.
+    // diversity, all from aerial altitudes). The spec pipeline needs
+    // near-horizontal "drone-eye" framing where the building's walls fill
+    // the centre of the frame. A second 4-shot orbit at building mid-height
+    // with a wider FOV and closer radius achieves this without disrupting
+    // the rebake captures.
     let specInputs: ReconstructionSpecInputs | undefined
     if (wantSpecInputs) {
-      emit('isolating-views', 0, 'Capturing drone-eye views...')
+      emit('capturing-views', 0.95, 'Capturing drone-eye photos...')
 
       // Cropped geometry is in world space; compute its real-world bbox to
       // size the orbit. Use horizontal extent to pick a radius that frames
@@ -345,7 +339,7 @@ export async function reconstructBuilding(input: ReconstructionInput): Promise<R
         },
       })
 
-      console.debug('[reconstruct] ml capture orbit', {
+      console.debug('[reconstruct] spec capture orbit', {
         target: mlTarget.toArray(),
         radius: mlRadius,
         altitude: mlAltitude,
@@ -353,17 +347,13 @@ export async function reconstructBuilding(input: ReconstructionInput): Promise<R
       })
 
       // azimuth convention: cap[0]=south (front), [1]=east (right), [2]=north (back), [3]=west (left)
-      emit('isolating-views', 0.4, 'Masking front view...')
-      const frontBlob = await isolateBuilding(mlCaptures[0], cropped.geometry, tileScene.renderer)
+      const frontBlob = await captureToBlob(mlCaptures[0], tileScene.renderer)
       throwIfAborted()
-      emit('isolating-views', 0.55, 'Masking right view...')
-      const rightBlob = await isolateBuilding(mlCaptures[1], cropped.geometry, tileScene.renderer)
+      const rightBlob = await captureToBlob(mlCaptures[1], tileScene.renderer)
       throwIfAborted()
-      emit('isolating-views', 0.7, 'Masking back view...')
-      const backBlob = await isolateBuilding(mlCaptures[2], cropped.geometry, tileScene.renderer)
+      const backBlob = await captureToBlob(mlCaptures[2], tileScene.renderer)
       throwIfAborted()
-      emit('isolating-views', 0.85, 'Masking left view...')
-      const leftBlob = await isolateBuilding(mlCaptures[3], cropped.geometry, tileScene.renderer)
+      const leftBlob = await captureToBlob(mlCaptures[3], tileScene.renderer)
       throwIfAborted()
 
       specInputs = {
@@ -373,7 +363,6 @@ export async function reconstructBuilding(input: ReconstructionInput): Promise<R
         left:  { blob: leftBlob,  capture: mlCaptures[3] },
         dimensionsM: { x: cdim.x, y: cdim.y, z: cdim.z },
       }
-      emit('isolating-views', 1, 'Isolated 4 drone-eye views')
     }
 
     // ─── 4. Texture re-bake (optional) ──────────────────────────────────────
@@ -424,4 +413,49 @@ export async function reconstructBuilding(input: ReconstructionInput): Promise<R
   } finally {
     tileScene.dispose()
   }
+}
+
+/**
+ * Convert a captured texture (from multiViewCapture) to a PNG Blob.
+ * Renders the texture to a fullscreen-quad pass and reads the renderer's
+ * canvas as a blob. Does NOT mask out neighbour buildings — that
+ * neighbour-bleed is accepted (the LLM is robust to surrounding context
+ * and schema constraints prevent feature placement outside the footprint).
+ */
+async function captureToBlob(
+  capture: CapturedView,
+  renderer: THREE.WebGLRenderer,
+): Promise<Blob> {
+  const size = (capture.texture.image as { width?: number } | null)?.width ?? 1024
+
+  const scene = new THREE.Scene()
+  const cam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1)
+  const mat = new THREE.MeshBasicMaterial({ map: capture.texture })
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), mat)
+  scene.add(mesh)
+
+  const prev = new THREE.Vector2()
+  renderer.getSize(prev)
+  const prevTarget = renderer.getRenderTarget()
+
+  renderer.setSize(size, size, false)
+  renderer.setRenderTarget(null)
+  renderer.render(scene, cam)
+
+  const blob = await new Promise<Blob>((resolve) => {
+    const canvas = renderer.domElement as HTMLCanvasElement
+    if (typeof canvas.toBlob === 'function') {
+      canvas.toBlob((b) => resolve(b ?? new Blob([])), 'image/png')
+    } else {
+      // OffscreenCanvas path
+      const off = canvas as unknown as OffscreenCanvas
+      off.convertToBlob({ type: 'image/png' }).then(resolve)
+    }
+  })
+
+  renderer.setSize(prev.x, prev.y, false)
+  renderer.setRenderTarget(prevTarget)
+  mat.dispose()
+  mesh.geometry.dispose()
+  return blob
 }

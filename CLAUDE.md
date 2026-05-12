@@ -50,7 +50,9 @@ A 5-step wizard (`/survey`) collects an address, electricity bill, **explicit us
 - `src/lib/db.ts` — Prisma singleton with PrismaPg adapter (1 connection per serverless instance).
 
 **3D viewer:**
-`SolarRoofViewer.tsx` uses React Three Fiber. Primary 3D source is **Google Photorealistic 3D Tiles** streamed via the Map Tiles API — set `NEXT_PUBLIC_GOOGLE_MAPS_API_KEY` and enable the *Map Tiles API* in Google Cloud. When tiles fail to load (≥3 `tile-load-error` events) the viewer falls back to a **Google Solar DSM heightmap mesh** (`DsmMesh`) so the building still appears even outside Photorealistic Tiles coverage. The legacy LiDAR / OS NGD / procedural Solar-segment reconstruction modes have been removed: translucent roof-segment overlays and panel-placement rectangles are now composited on top of the photo-textured tiles (or the DSM mesh). The PDF capture path waits up to 800ms for in-flight tiles to land before sampling the WebGL canvas. Three.js convention used throughout: **x = east, z = south** (z is inverted from typical map north-up). The older `Solar3DViewer.tsx` remains in-tree only for legacy reports.
+`SolarRoofViewer.tsx` uses React Three Fiber. The primary path captures **Google Photorealistic 3D Tiles** offscreen and feeds 3 cardinal photos + the OS footprint + Google Solar API roof segments to a **Claude Sonnet 4.6 vision call** (`/api/report/[id]/reconstruction/spec`) which returns a strict Zod-validated `BuildingSpec`. A deterministic procedural renderer (`specRenderer.ts`) builds walls from the footprint, roof planes from the Solar segments, and features (chimneys, dormers, conservatory, garage) as parametric primitives. The existing `textureRebaker.ts` projects the 4 captured photos onto the procedural mesh. Set `NEXT_PUBLIC_GOOGLE_MAPS_API_KEY`, `ANTHROPIC_API_KEY`, and (optionally) `GOOGLE_SOLAR_API_KEY` to enable the full pipeline.
+
+When the Anthropic call is unavailable, the API route returns a `FALLBACK_SPEC` and the renderer still produces a massing model from footprint + Solar segments alone. When tile capture fails entirely, the viewer falls back to a **Google Solar DSM heightmap mesh** (`DsmMesh`). Three.js convention used throughout: **x = east, z = south**. The older `Solar3DViewer.tsx` remains in-tree only for legacy reports.
 
 ## MCS Solar Calculation
 
@@ -77,6 +79,8 @@ Self-consumption is computed per month from a UK seasonal generation profile and
 | `OS_API_KEY` | Server-side only; omit to disable OS NGD lookup |
 | `MISTRAL_API_KEY` | Server-side only; bill OCR via Mistral. Omit and `/api/bill/parse` returns 503; users must enter the bill manually |
 | `GOOGLE_SOLAR_API_KEY` | Server-side only; used for higher-fidelity roof + panel layout |
+| `ANTHROPIC_API_KEY` | Server-side only; required for spec generation (see 3D viewer). Missing → fallback massing-only spec |
+| `NEXT_PUBLIC_GOOGLE_MAPS_API_KEY` | Public; enables Google Photorealistic 3D Tiles in the viewer |
 | `NEXT_PUBLIC_APP_URL` | e.g. `http://localhost:3000` in dev |
 
 **Mock mode:** Omitting `OS_API_KEY` still returns 5 mock Norwich addresses for autocomplete, but `fetchBuilding()` returns `null` — there is no fake 10×8m fallback. The Review step blocks generation in that case.
