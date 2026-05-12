@@ -1,6 +1,31 @@
 import * as THREE from 'three'
 import type { BuildingSpec } from './buildingSpec'
 
+/**
+ * Ensure a geometry's normals point in the +Y hemisphere (upward).
+ * Roof faces are built with various winding orders; this normalises
+ * lighting so all roof faces are lit consistently regardless of how
+ * the geometry was constructed.
+ */
+function ensureUpwardNormals(geom: THREE.BufferGeometry): void {
+  const normalAttr = geom.getAttribute('normal') as THREE.BufferAttribute | undefined
+  if (!normalAttr) return
+  let avgY = 0
+  for (let i = 0; i < normalAttr.count; i++) avgY += normalAttr.getY(i)
+  avgY /= normalAttr.count
+  if (avgY < 0) {
+    for (let i = 0; i < normalAttr.count; i++) {
+      normalAttr.setXYZ(
+        i,
+        -normalAttr.getX(i),
+        -normalAttr.getY(i),
+        -normalAttr.getZ(i),
+      )
+    }
+    normalAttr.needsUpdate = true
+  }
+}
+
 export interface RoofFaceMeta {
   planeIndex: number
   kind: 'roof' | 'gable' | 'fill'
@@ -76,7 +101,15 @@ export function buildRoof(
     return buildMansardRoof(ring, validPlanes, eaveHeightM, cx, cz)
   }
 
-  // ── Mixed / fallback: render planes independently, fill gaps with gable
+  // ── Mixed with 3+ planes: use hip-style apex for coherent geometry ───
+  // (Independent triangles per plane produce disconnected fragments.
+  // A hip-style apex over the centroid gives a single coherent roof that
+  // still respects the average pitch of the planes.)
+  if (roof.type === 'mixed' && validPlanes.length >= 3) {
+    return buildHipRoof(ring, validPlanes, eaveHeightM, cx, cz)
+  }
+
+  // ── Mixed / fallback with <3 planes: render planes independently ─────
   return buildMixedRoof(ring, validPlanes, eaveHeightM, cx, cz)
 }
 
@@ -311,6 +344,7 @@ function addTriangle(
   ])
   geom.setAttribute('position', new THREE.BufferAttribute(positions, 3))
   geom.computeVertexNormals()
+  ensureUpwardNormals(geom)
   geom.setAttribute('uv', new THREE.BufferAttribute(new Float32Array([0, 0, 1, 0, 0.5, 1]), 2))
   const mat = new THREE.MeshStandardMaterial({ color: 0x7a5a3a, side: THREE.DoubleSide })
   const mesh = new THREE.Mesh(geom, mat)
@@ -320,8 +354,8 @@ function addTriangle(
 
   const n = new THREE.Vector3()
   geom.computeBoundingSphere()
-  const posAttr = geom.getAttribute('normal')
-  if (posAttr) n.fromBufferAttribute(posAttr, 0)
+  const normalAttr = geom.getAttribute('normal')
+  if (normalAttr) n.fromBufferAttribute(normalAttr, 0)
   faces.push({ planeIndex, kind, normal: n })
 }
 
@@ -345,6 +379,7 @@ function addQuad(
   ])
   geom.setAttribute('position', new THREE.BufferAttribute(positions, 3))
   geom.computeVertexNormals()
+  ensureUpwardNormals(geom)
   geom.setAttribute('uv', new THREE.BufferAttribute(new Float32Array([0,0, 1,0, 1,1, 0,0, 1,1, 0,1]), 2))
   const mat = new THREE.MeshStandardMaterial({ color: 0x7a5a3a, side: THREE.DoubleSide })
   const mesh = new THREE.Mesh(geom, mat)
@@ -376,6 +411,7 @@ function addPolygonCap(
   const geom = new THREE.BufferGeometry()
   geom.setAttribute('position', new THREE.BufferAttribute(new Float32Array(positions), 3))
   geom.computeVertexNormals()
+  ensureUpwardNormals(geom)
   const uvs = new Float32Array(positions.length / 3 * 2)
   for (let i = 0; i < positions.length / 3; i++) {
     uvs[i * 2]     = (positions[i * 3] + 50) / 100
