@@ -142,10 +142,29 @@ export async function reconstructBuilding(input: ReconstructionInput): Promise<R
 
   try {
     // Position camera so the building is centred in frame, forcing high-LOD load.
-    // Start with a 60m orbit at ~40m altitude — typical building bounding box.
+    // CRITICAL: the OS NGD footprint can be 10-30m offset from the geocoded
+    // address coords. The tile scene's local origin is at (lat, lng), so the
+    // building tiles land at the footprint's offset, NOT at (0,0,0). If we
+    // warm the cache at the origin, we miss the actual building tiles and
+    // cropping later fails with "No tile geometry inside the building
+    // footprint". Aim the warmup camera at the footprint centroid (in local
+    // metres) so the cache always loads tiles where the building actually is.
+    let footprintCentreLocalX = 0
+    let footprintCentreLocalZ = 0
+    {
+      const cosLat = Math.cos((lat * Math.PI) / 180)
+      let sumX = 0
+      let sumZ = 0
+      for (const [pLng, pLat] of footprintPolygon) {
+        sumX += (pLng - lng) * cosLat * 111_320
+        sumZ += (pLat - lat) * 110_540 * -1
+      }
+      footprintCentreLocalX = sumX / footprintPolygon.length
+      footprintCentreLocalZ = sumZ / footprintPolygon.length
+    }
     const cam = tileScene.camera
-    cam.position.set(40, 50, 40)
-    cam.lookAt(0, 5, 0)
+    cam.position.set(footprintCentreLocalX + 40, 50, footprintCentreLocalZ + 40)
+    cam.lookAt(footprintCentreLocalX, 5, footprintCentreLocalZ)
     cam.updateProjectionMatrix()
 
     // Warm the tile cache by ticking updates with the camera in position.
@@ -320,15 +339,18 @@ export async function reconstructBuilding(input: ReconstructionInput): Promise<R
       const ccentre = new THREE.Vector3()
       cbb.getCenter(ccentre)
       const horizExtent = Math.max(cdim.x, cdim.z)
-      // Pull camera back ~1.8× the half-width so the building fills ~70% of
-      // the frame at 55° FOV; clamp so we don't end up inside the geometry.
-      const mlRadius = Math.max(horizExtent * 0.9 + 6, 10)
-      // Camera at half-building-height — looks horizontal at building centre.
-      const mlAltitude = ccentre.y
-      // Orbit target = cropped building centre (in world space). The orbit
-      // helper uses target.y to set camera y as `target.y + altitude`, so
-      // wrap that into a single absolute target.
+      // ── High-oblique framing for Meshy image-to-3D ────────────────────
+      // The previous mid-height horizontal view (mlAltitude = ccentre.y)
+      // produced wall-only captures that Meshy can't reconstruct from. We
+      // need each cardinal to show roof AND walls in perspective — the
+      // distribution Meshy was trained on. Pull back enough that the whole
+      // building (including any extensions) fits with margin, and raise
+      // the camera above the roof so the elevation angle is ~30° down.
+      const mlRadius = Math.max(horizExtent * 1.6 + 10, 18)
       const mlTarget = ccentre.clone()
+      // Camera y = roof top + ~half-radius → atan(0.55) ≈ 28.8° elevation.
+      const cameraY = cbb.max.y + mlRadius * 0.55
+      const mlAltitude = cameraY
       const azimuths = [0, Math.PI / 2, Math.PI, (3 * Math.PI) / 2]
 
       const mlCaptures: CapturedView[] = await captureOrbit(tileScene.renderer, tileScene.scene, {

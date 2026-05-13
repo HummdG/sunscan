@@ -28,6 +28,24 @@ export async function replaceRoofInGlb(
       return { glb: meshyGlb, replaced: false }
     }
 
+    // Sanity check: if Meshy's eave AABB area is dramatically smaller than
+    // the real footprint area, the input mesh was too soft for Meshy to
+    // reconstruct (typical failure: a tiny crumpled blob). Grafting a
+    // footprint-sized procedural roof onto that produces the worst of both
+    // worlds — a huge plane with a wisp of geometry under it. Better to
+    // surface the raw Meshy output so the toggle lets the user see what
+    // happened and the caller can retry.
+    const meshyAabbAreaM2 = (roofAabb.maxX - roofAabb.minX) * (roofAabb.maxZ - roofAabb.minZ)
+    const footprintAreaM2 = polygonAreaAbs(footprintLocal)
+    if (footprintAreaM2 > 1 && meshyAabbAreaM2 < footprintAreaM2 * 0.4) {
+      console.warn('[glbRoofCorrector] meshy mesh too small relative to footprint', {
+        meshyAabbAreaM2,
+        footprintAreaM2,
+        ratio: meshyAabbAreaM2 / footprintAreaM2,
+      })
+      return { glb: meshyGlb, replaced: false }
+    }
+
     const synthRoof = buildSyntheticRoofSpec(roofSegments, footprintLocal)
     const result = buildRoof(footprintLocal, synthRoof, eaveHeightM)
 
@@ -97,16 +115,29 @@ function stripRoofFaces(doc: Document): RoofAabb | null {
 
         if (normalY > ROOF_NORMAL_Y_THRESHOLD) {
           totalRoofTriangles++
-          // Track AABB of the LOWEST vertex of each roof triangle (the eave line).
-          let lowY = ay, lowX = ax, lowZ = az
-          if (by < lowY) { lowY = by; lowX = bx; lowZ = bz }
-          if (cy < lowY) { lowY = cy; lowX = cx; lowZ = cz }
-          if (lowX < minX) minX = lowX
-          if (lowY < minY) minY = lowY
-          if (lowZ < minZ) minZ = lowZ
-          if (lowX > maxX) maxX = lowX
-          if (lowY > maxY) maxY = lowY
-          if (lowZ > maxZ) maxZ = lowZ
+          // Track AABB across ALL 3 vertices of every roof triangle.
+          // - XZ extent gives the roof's horizontal footprint (eave perimeter).
+          // - minY gives Meshy's inferred eave height; maxY gives the ridge.
+          // We translate the new roof so its lowest vertices land at this
+          // minY layer, with XZ centred on the AABB midpoint.
+          if (ax < minX) minX = ax
+          if (bx < minX) minX = bx
+          if (cx < minX) minX = cx
+          if (ax > maxX) maxX = ax
+          if (bx > maxX) maxX = bx
+          if (cx > maxX) maxX = cx
+          if (ay < minY) minY = ay
+          if (by < minY) minY = by
+          if (cy < minY) minY = cy
+          if (ay > maxY) maxY = ay
+          if (by > maxY) maxY = by
+          if (cy > maxY) maxY = cy
+          if (az < minZ) minZ = az
+          if (bz < minZ) minZ = bz
+          if (cz < minZ) minZ = cz
+          if (az > maxZ) maxZ = az
+          if (bz > maxZ) maxZ = bz
+          if (cz > maxZ) maxZ = cz
         } else {
           if (indexArray) {
             keepIndices.push(ia, ib, ic)
@@ -177,6 +208,18 @@ function buildSyntheticRoofSpec(
 
 function clamp(v: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, v))
+}
+
+/** Shoelace area of a 2D polygon, always positive. */
+function polygonAreaAbs(ring: Array<[number, number]>): number {
+  let a = 0
+  const n = ring.length
+  for (let i = 0; i < n; i++) {
+    const [x1, z1] = ring[i]
+    const [x2, z2] = ring[(i + 1) % n]
+    a += x1 * z2 - x2 * z1
+  }
+  return Math.abs(a) / 2
 }
 
 function extractRoofPositions(group: THREE.Group): Float32Array[] {

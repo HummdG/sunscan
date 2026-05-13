@@ -17,8 +17,17 @@ const SUPABASE_BUCKET = 'sunscan-reports'
 /** Order matters: the 4 selected indices are picked from this array. */
 const ALL_LABELS: EnhanceLabel[] = ['front', 'back', 'left', 'right', 'topDown', 'satellite']
 
-/** Indices into ALL_LABELS to send to Meshy. Front, back, topDown, satellite. */
-const MESHY_VIEW_SELECTION: readonly EnhanceLabel[] = ['front', 'back', 'topDown', 'satellite']
+/**
+ * Indices into ALL_LABELS to send to Meshy.
+ *
+ * The 4 cardinal high-oblique drone-eye captures are the best diet for an
+ * image-to-3D model: each view shows roof + walls in perspective, the same
+ * distribution Meshy was trained on. We deliberately do NOT send the
+ * top-down or the Google Maps Static satellite blob, because both are
+ * orthographic/flat — Meshy interprets them as ground planes and produces
+ * a giant flat sheet with a tiny crumpled blob on top.
+ */
+const MESHY_VIEW_SELECTION: readonly EnhanceLabel[] = ['front', 'right', 'back', 'left']
 
 interface InputRoofSegment {
   pitchDeg: number
