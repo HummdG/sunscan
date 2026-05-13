@@ -97,9 +97,17 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params
+  console.log('[generate] POST received for report id:', id, {
+    hasMeshyKey: !!process.env.MESHY_API_KEY,
+    hasFalKey: !!process.env.FAL_KEY,
+    hasGeminiKey: !!process.env.GEMINI_API_KEY,
+    hasSupabaseUrl: !!process.env.NEXT_PUBLIC_SUPABASE_URL,
+    hasSupabaseKey: !!process.env.SUPABASE_SERVICE_KEY,
+  })
 
   const formData = await req.formData().catch(() => null)
   if (!formData) {
+    console.warn('[generate] no multipart body')
     return NextResponse.json({ error: 'Missing multipart body' }, { status: 400 })
   }
 
@@ -145,6 +153,7 @@ export async function POST(
 
   const supabase = getSupabaseAdmin()
   if (!supabase) {
+    console.error('[generate] Supabase admin client null — NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_KEY missing')
     return NextResponse.json(
       { error: 'Supabase not configured (NEXT_PUBLIC_SUPABASE_URL / SUPABASE_SERVICE_KEY)' },
       { status: 503 },
@@ -154,6 +163,7 @@ export async function POST(
   // ─── 4. Cache hit? ──────────────────────────────────────────────────────────
   const cachedCorrected = await downloadFromCache(supabase, correctedPath)
   if (cachedCorrected) {
+    console.log('[generate] cache hit, returning early:', correctedPath)
     const cachedRaw = (await downloadFromCache(supabase, rawPath)) ?? cachedCorrected
     return NextResponse.json({
       reconstructedModelUrl: cachedCorrected,
@@ -164,13 +174,16 @@ export async function POST(
       roofReplaced: true,
     })
   }
+  console.log('[generate] cache miss, cacheKey:', cacheKey)
 
   if (!process.env.MESHY_API_KEY) {
+    console.error('[generate] MESHY_API_KEY is not set — returning 502. Check .env.local and RESTART the dev server.')
     return NextResponse.json(
       { error: 'MESHY_API_KEY not configured', retryable: true },
       { status: 502 },
     )
   }
+  console.log('[generate] MESHY_API_KEY present, length:', process.env.MESHY_API_KEY.length)
 
   // ─── 5. Nano Banana enhancement ─────────────────────────────────────────────
   const enhanceResults = await enhanceMany(
