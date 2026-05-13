@@ -197,6 +197,31 @@ export async function POST(
     return enhanceResults[idx].png
   })
 
+  // ─── 6b. Upload front image to Supabase for a stable public URL ───────────
+  // Meshy's direct API misbehaves with large data URIs (>1MB), failing
+  // with a generic "temporarily unavailable" after running for ~50s.
+  // Hosting the PNG on Supabase and passing the signed URL bypasses the
+  // data URI path entirely.
+  const meshyImageUploadPath = `meshy/tmp/${cacheKey}.front.png`
+  const { error: tmpUploadError } = await supabase.storage
+    .from(SUPABASE_BUCKET)
+    .upload(meshyImageUploadPath, meshyImages[0], {
+      contentType: 'image/png',
+      upsert: true,
+    })
+  if (tmpUploadError) {
+    console.error('[generate] tmp image upload failed', tmpUploadError)
+    return NextResponse.json({ error: 'Failed to stage Meshy input image' }, { status: 502 })
+  }
+  const { data: signedInput } = await supabase.storage
+    .from(SUPABASE_BUCKET)
+    .createSignedUrl(meshyImageUploadPath, 60 * 60)
+  if (!signedInput?.signedUrl) {
+    console.error('[generate] failed to sign tmp image url')
+    return NextResponse.json({ error: 'Failed to sign Meshy input image url' }, { status: 502 })
+  }
+  console.log('[generate] meshy input image signed url:', signedInput.signedUrl.slice(0, 100))
+
   // ─── 7. Meshy ──────────────────────────────────────────────────────────────
   let meshyGlb: Buffer
   try {
@@ -217,6 +242,7 @@ export async function POST(
     }))
     const texturePrompt = buildTexturePrompt(meshyRoofSegments, meshyDims)
     const meshyResult = await generateGlb({
+      imageUrl: signedInput.signedUrl,
       images: meshyImages,
       texturePrompt,
       enablePbr: true,

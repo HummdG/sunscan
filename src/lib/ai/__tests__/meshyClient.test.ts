@@ -22,8 +22,8 @@ describe('buildTexturePrompt', () => {
     const prompt = buildTexturePrompt(segments, dims)
     expect(prompt).toContain('seg1')
     expect(prompt).toContain('seg2')
-    expect(prompt).toContain('30°')
-    expect(prompt).toContain('40°')
+    expect(prompt).toContain('30 deg')
+    expect(prompt).toContain('40 deg')
   })
 
   it('caps segment enumeration at 8', () => {
@@ -46,7 +46,7 @@ describe('buildTexturePrompt', () => {
 
   it('includes footprint dimensions and eave/ridge heights', () => {
     const prompt = buildTexturePrompt([], dims)
-    expect(prompt).toContain('9.2m × 6.8m')
+    expect(prompt).toContain('9.2m by 6.8m')
     expect(prompt).toContain('eaves 5.8m')
     expect(prompt).toContain('ridge 8.4m')
   })

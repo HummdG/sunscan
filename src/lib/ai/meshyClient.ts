@@ -19,6 +19,13 @@ export interface MeshyInput {
    * stability and future endpoints).
    */
   images: Buffer[]
+  /**
+   * Optional public HTTPS URL for the front image. When provided, sent to
+   * Meshy instead of an embedded data URI. Strongly preferred — Meshy's
+   * API misbehaves with large data URIs (>1MB), failing with a misleading
+   * "temporarily unavailable" error after running for ~50s.
+   */
+  imageUrl?: string
   texturePrompt: string
   targetPolycount?: number
   enablePbr?: boolean
@@ -46,6 +53,12 @@ function fmt(n: number, digits = 1): string {
   return Number.isFinite(n) ? n.toFixed(digits) : '?'
 }
 
+/**
+ * Build the texture_prompt sent to Meshy. ASCII only — `°`, `²`, `×` and
+ * other multibyte glyphs sometimes trip Meshy's text pipeline and cause
+ * the whole task to fail with a misleading "temporarily unavailable"
+ * error.
+ */
 export function buildTexturePrompt(
   roofSegments: MeshyRoofSegment[],
   dims: MeshyDims,
@@ -54,13 +67,13 @@ export function buildTexturePrompt(
     .slice(0, 8)
     .map(
       (s, i) =>
-        `seg${i + 1} pitch ${fmt(s.pitchDeg, 0)}°/azimuth ${fmt(s.azimuthDeg, 0)}° (MCS)/area ${fmt(s.areaM2)}m²`,
+        `seg${i + 1} pitch ${fmt(s.pitchDeg, 0)} deg/azimuth ${fmt(s.azimuthDeg, 0)} deg (MCS)/area ${fmt(s.areaM2)} sqm`,
     )
   const segPart = segDescs.length ? `Roof segments: ${segDescs.join('. ')}.` : ''
   return [
     'UK single-family house.',
     segPart,
-    `Footprint ${fmt(dims.widthM)}m × ${fmt(dims.depthM)}m, eaves ${fmt(dims.eaveHeightM)}m, ridge ${fmt(dims.ridgeHeightM)}m.`,
+    `Footprint ${fmt(dims.widthM)}m by ${fmt(dims.depthM)}m, eaves ${fmt(dims.eaveHeightM)}m, ridge ${fmt(dims.ridgeHeightM)}m.`,
     'Materials: clay roof tiles, brick walls, painted timber windows.',
   ]
     .filter(Boolean)
@@ -194,11 +207,16 @@ export async function generateGlb(input: MeshyInput): Promise<MeshyOutput> {
     throw new Error(`Meshy image is ${png.length} bytes (>8MB cap)`)
   }
 
-  console.log('[meshy] direct API: image bytes=', png.length, 'polycount=', input.targetPolycount ?? defaultPolycount())
+  const imageUrl = input.imageUrl ?? `data:image/png;base64,${png.toString('base64')}`
+  console.log('[meshy] direct API:', {
+    imageBytes: png.length,
+    polycount: input.targetPolycount ?? defaultPolycount(),
+    imageMode: input.imageUrl ? 'https-url' : 'data-uri',
+    urlPreview: imageUrl.slice(0, 80),
+  })
 
-  const dataUri = `data:image/png;base64,${png.toString('base64')}`
   const body: Record<string, unknown> = {
-    image_url: dataUri,
+    image_url: imageUrl,
     ai_model: process.env.MESHY_AI_MODEL || DEFAULT_AI_MODEL,
     topology: 'triangle',
     target_polycount: input.targetPolycount ?? defaultPolycount(),
