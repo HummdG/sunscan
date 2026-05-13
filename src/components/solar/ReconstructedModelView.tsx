@@ -17,6 +17,52 @@ interface LoadedScene {
   centreY: number
 }
 
+export type ModelSourceVariant = 'corrected' | 'raw'
+
+export type ModelSourceProp =
+  | Blob
+  | string
+  | { corrected: string; raw: string }
+  | null
+
+const TOGGLE_STORAGE_KEY = 'sunscan.reconstruction.modelSource'
+
+function isDualSource(s: ModelSourceProp): s is { corrected: string; raw: string } {
+  return !!s && typeof s === 'object' && 'corrected' in s && 'raw' in s
+}
+
+function readStoredVariant(): ModelSourceVariant {
+  if (typeof window === 'undefined') return 'corrected'
+  try {
+    const v = window.localStorage.getItem(TOGGLE_STORAGE_KEY)
+    return v === 'raw' ? 'raw' : 'corrected'
+  } catch {
+    return 'corrected'
+  }
+}
+
+function persistStoredVariant(v: ModelSourceVariant): void {
+  if (typeof window === 'undefined') return
+  try { window.localStorage.setItem(TOGGLE_STORAGE_KEY, v) } catch { /* ignore */ }
+}
+
+async function loadGlb(source: Blob | string): Promise<LoadedScene> {
+  const loader = new GLTFLoader()
+  const url = typeof source === 'string' ? source : URL.createObjectURL(source)
+  try {
+    const gltf = await loader.loadAsync(url)
+    const root = gltf.scene
+    const box = new THREE.Box3().setFromObject(root)
+    const size = new THREE.Vector3()
+    box.getSize(size)
+    const span = Math.max(size.x, size.z, 6)
+    const centreY = (box.min.y + box.max.y) * 0.5
+    return { scene: root, span, centreY }
+  } finally {
+    if (typeof source !== 'string') URL.revokeObjectURL(url)
+  }
+}
+
 function useGltfBlob(source: Blob | string | null): { scene: LoadedScene | null; error: string | null } {
   const [scene, setScene] = useState<LoadedScene | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -24,32 +70,14 @@ function useGltfBlob(source: Blob | string | null): { scene: LoadedScene | null;
   useEffect(() => {
     let cancelled = false
     ;(async () => {
-      // Defer state clearing into a microtask so React doesn't see synchronous
-      // setState within the effect body.
       await Promise.resolve()
       if (cancelled) return
       setScene(null)
       setError(null)
       if (!source) return
-
       try {
-        const loader = new GLTFLoader()
-        const url = typeof source === 'string' ? source : URL.createObjectURL(source)
-        const gltf = await loader.loadAsync(url)
-        if (cancelled) {
-          if (typeof source !== 'string') URL.revokeObjectURL(url)
-          return
-        }
-        if (typeof source !== 'string') URL.revokeObjectURL(url)
-
-        const root = gltf.scene
-        const box = new THREE.Box3().setFromObject(root)
-        const size = new THREE.Vector3()
-        box.getSize(size)
-        const span = Math.max(size.x, size.z, 6)
-        const centreY = (box.min.y + box.max.y) * 0.5
-
-        setScene({ scene: root, span, centreY })
+        const loaded = await loadGlb(source)
+        if (!cancelled) setScene(loaded)
       } catch (e) {
         if (!cancelled) setError(e instanceof Error ? e.message : 'Failed to load model')
       }
@@ -58,6 +86,45 @@ function useGltfBlob(source: Blob | string | null): { scene: LoadedScene | null;
   }, [source])
 
   return { scene, error }
+}
+
+function useDualGltf(source: { corrected: string; raw: string } | null): {
+  scenes: Map<ModelSourceVariant, LoadedScene>
+  ready: boolean
+  error: string | null
+} {
+  const [scenes, setScenes] = useState<Map<ModelSourceVariant, LoadedScene>>(new Map())
+  const [ready, setReady] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      await Promise.resolve()
+      if (cancelled) return
+      setScenes(new Map())
+      setReady(false)
+      setError(null)
+      if (!source) return
+      try {
+        const [corrected, raw] = await Promise.all([
+          loadGlb(source.corrected),
+          loadGlb(source.raw),
+        ])
+        if (cancelled) return
+        const map = new Map<ModelSourceVariant, LoadedScene>()
+        map.set('corrected', corrected)
+        map.set('raw', raw)
+        setScenes(map)
+        setReady(true)
+      } catch (e) {
+        if (!cancelled) setError(e instanceof Error ? e.message : 'Failed to load model')
+      }
+    })()
+    return () => { cancelled = true }
+  }, [source])
+
+  return { scenes, ready, error }
 }
 
 function SceneContent({ scene }: { scene: LoadedScene }) {
@@ -91,22 +158,38 @@ function CaptureBridge({ onCaptureRef }: { onCaptureRef: React.MutableRefObject<
 }
 
 export interface ReconstructedModelViewProps {
-  /** GLB source — either a remote URL or an in-memory Blob */
-  source: Blob | string | null
+  /** GLB source — a remote URL, an in-memory Blob, or { corrected, raw } pair for the toggle. */
+  source: ModelSourceProp
   /** Optional capture callback for the PDF; receives a PNG dataURL */
   onCapture?: (dataUrl: string) => void
   height?: number
 }
 
 export function ReconstructedModelView({ source, onCapture, height = 380 }: ReconstructedModelViewProps) {
-  const { scene, error } = useGltfBlob(source)
+  const dual = isDualSource(source) ? source : null
+  const single = dual ? null : (source as Blob | string | null)
+
+  const singleResult = useGltfBlob(single)
+  const dualResult = useDualGltf(dual)
+  const [variant, setVariantState] = useState<ModelSourceVariant>(() => readStoredVariant())
+
+  const setVariant = (v: ModelSourceVariant) => {
+    setVariantState(v)
+    persistStoredVariant(v)
+  }
+
+  const activeScene: LoadedScene | null = dual
+    ? (dualResult.scenes.get(variant) ?? null)
+    : singleResult.scene
+
+  const error = dual ? dualResult.error : singleResult.error
   const captureRef = useRef<(() => string) | null>(null)
 
   const camPos = useMemo<[number, number, number]>(() => {
-    if (!scene) return [12, 9, 12]
-    const r = scene.span * 1.4
-    return [r * 0.55, scene.span * 0.9, r]
-  }, [scene])
+    if (!activeScene) return [12, 9, 12]
+    const r = activeScene.span * 1.4
+    return [r * 0.55, activeScene.span * 0.9, r]
+  }, [activeScene])
 
   if (error) {
     return (
@@ -118,7 +201,7 @@ export function ReconstructedModelView({ source, onCapture, height = 380 }: Reco
 
   return (
     <div className="relative w-full h-full" style={{ height }}>
-      {!scene ? (
+      {!activeScene ? (
         <Skeleton className="w-full h-full" />
       ) : (
         <>
@@ -128,7 +211,7 @@ export function ReconstructedModelView({ source, onCapture, height = 380 }: Reco
             shadows
           >
             <Suspense fallback={null}>
-              <SceneContent scene={scene} />
+              <SceneContent scene={activeScene} />
               <CaptureBridge onCaptureRef={captureRef} />
             </Suspense>
           </Canvas>
@@ -137,11 +220,63 @@ export function ReconstructedModelView({ source, onCapture, height = 380 }: Reco
             Drag to rotate · Scroll to zoom
           </div>
 
-          {onCapture && (
+          {dual && (
+            <div className="absolute top-3 right-3 flex flex-col items-end gap-1">
+              <div
+                className="inline-flex rounded-md shadow border border-white/40 bg-black/40 backdrop-blur text-[11px] overflow-hidden"
+                role="tablist"
+                aria-label="Reconstructed model source"
+              >
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={variant === 'corrected'}
+                  onClick={() => setVariant('corrected')}
+                  className={`px-2.5 py-1 transition-colors ${
+                    variant === 'corrected'
+                      ? 'bg-white text-slate-900'
+                      : 'text-white/85 hover:bg-white/10'
+                  }`}
+                >
+                  Roof-corrected
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={variant === 'raw'}
+                  onClick={() => setVariant('raw')}
+                  className={`px-2.5 py-1 transition-colors ${
+                    variant === 'raw'
+                      ? 'bg-white text-slate-900'
+                      : 'text-white/85 hover:bg-white/10'
+                  }`}
+                >
+                  Meshy raw
+                </button>
+              </div>
+              <div className="text-[10px] text-white/80 bg-black/30 rounded px-1.5 py-0.5 max-w-[15rem] text-right leading-tight">
+                Corrected: roof rebuilt from Google Solar data. Raw: Meshy AI output.
+              </div>
+            </div>
+          )}
+
+          {onCapture && !dual && (
             <Button
               size="sm"
               variant="secondary"
               className="absolute top-3 right-3 gap-1.5 shadow"
+              onClick={() => { if (captureRef.current) onCapture(captureRef.current()) }}
+            >
+              <Camera className="h-3.5 w-3.5" />
+              Capture
+            </Button>
+          )}
+
+          {onCapture && dual && (
+            <Button
+              size="sm"
+              variant="secondary"
+              className="absolute bottom-3 right-3 gap-1.5 shadow"
               onClick={() => { if (captureRef.current) onCapture(captureRef.current()) }}
             >
               <Camera className="h-3.5 w-3.5" />

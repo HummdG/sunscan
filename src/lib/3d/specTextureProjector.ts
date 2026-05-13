@@ -1,3 +1,8 @@
+/**
+ * @deprecated Superseded by the Meshy + roof-correction pipeline. Textures
+ * now come from Meshy directly; this projector is no longer wired into the
+ * 3D viewer. Slated for removal after the new pipeline is validated.
+ */
 import * as THREE from 'three'
 import { rebakeTextures } from './textureRebaker'
 import type { CapturedView } from './multiViewCapture'

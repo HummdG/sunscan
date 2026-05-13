@@ -1,3 +1,7 @@
+/**
+ * @deprecated Superseded by the Meshy + roof-correction pipeline. Slated for
+ * removal after the new pipeline is validated.
+ */
 import * as THREE from 'three'
 import { applySlotAtlas } from './slotAtlas'
 import type { CapturedView } from './multiViewCapture'

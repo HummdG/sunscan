@@ -43,6 +43,7 @@ model Report {
   panelLayoutJson           String   @default("[]")
   model3dImageUrl           String?
   reconstructedModelUrl     String?
+  reconstructedModelRawUrl  String?
   pdfUrl                    String?
   status                    String   @default("draft")
   solarApiJson              String?

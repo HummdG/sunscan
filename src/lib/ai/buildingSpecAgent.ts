@@ -1,3 +1,10 @@
+/**
+ * @deprecated The Claude-Sonnet-based BuildingSpec pipeline has been replaced
+ * by the Meshy + roof-correction flow in
+ * `/api/report/[id]/reconstruction/generate`. The route file at
+ * `src/app/api/report/[id]/reconstruction/spec/route.ts` is no longer reached
+ * from the 3D viewer. Slated for removal after the new pipeline is validated.
+ */
 import Anthropic from '@anthropic-ai/sdk'
 import {
   BuildingSpecSchema,

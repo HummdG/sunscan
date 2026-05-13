@@ -1,3 +1,10 @@
+/**
+ * @deprecated Superseded by the Meshy + roof-correction pipeline in
+ * `/api/report/[id]/reconstruction/generate`. Retained until that pipeline
+ * has ~2 weeks of production validation, then this module can be removed.
+ * Note: `buildRoof()` from `./specRoof` is still load-bearing — it's reused
+ * by `src/lib/3d/glbRoofCorrector.ts` to graft the corrected roof.
+ */
 import * as THREE from 'three'
 import type { BuildingSpec } from './buildingSpec'
 import { buildWalls } from './specWalls'

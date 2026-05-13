@@ -1,3 +1,8 @@
+/**
+ * @deprecated Superseded by `/api/report/[id]/reconstruction/generate` (Meshy
+ * + roof-correction pipeline). The 3D viewer no longer calls this route.
+ * Slated for removal after the new pipeline is validated.
+ */
 import { NextRequest, NextResponse } from 'next/server'
 import { createHash } from 'node:crypto'
 import { createClient } from '@supabase/supabase-js'

@@ -22,11 +22,7 @@ import { buildSolar3DModel, DEFAULT_WALL_HEIGHT_M } from '@/lib/solar/solarApiMa
 import { computePanelLayouts } from '@/lib/solar/panelPlacementService'
 import type { PanelLayout, Solar3DModel } from '@/types/solar'
 import { reconstructBuilding, type ReconstructionProgress } from '@/lib/3d/buildingExtractor'
-import { renderSpec } from '@/lib/3d/specRenderer'
-import { projectTextures } from '@/lib/3d/specTextureProjector'
-import { exportGLB } from '@/lib/3d/glbExporter'
-import type { BuildingSpec } from '@/lib/3d/buildingSpec'
-import { ReconstructedModelView } from '@/components/solar/ReconstructedModelView'
+import { ReconstructedModelView, type ModelSourceProp } from '@/components/solar/ReconstructedModelView'
 
 // ─── Reconstruction helpers ───────────────────────────────────────────────────
 
@@ -38,6 +34,65 @@ async function persistGlb(reportId: string, glb: Blob, signal: AbortSignal): Pro
   } catch (e) {
     if ((e as Error).name !== 'AbortError') console.warn('Persist GLB failed', e)
   }
+}
+
+/**
+ * Load the Google Maps Static satellite image client-side, draw it to a
+ * canvas with crossOrigin so the bytes are not tainted, and return the PNG
+ * as a Blob ready for FormData upload.
+ */
+async function captureSatelliteBlob(
+  lat: number,
+  lng: number,
+  mapsKey: string,
+  signal: AbortSignal,
+): Promise<Blob | null> {
+  const SIZE = 640
+  const ZOOM = 20
+  const url = `https://maps.googleapis.com/maps/api/staticmap?center=${lat},${lng}&zoom=${ZOOM}&size=${SIZE}x${SIZE}&maptype=satellite&key=${mapsKey}`
+  return new Promise<Blob | null>((resolve) => {
+    const img = new Image()
+    img.crossOrigin = 'anonymous'
+    let settled = false
+    const cleanup = () => {
+      img.onload = null
+      img.onerror = null
+    }
+    signal.addEventListener('abort', () => {
+      if (settled) return
+      settled = true
+      cleanup()
+      resolve(null)
+    })
+    img.onload = () => {
+      if (settled) return
+      try {
+        const canvas = document.createElement('canvas')
+        canvas.width = SIZE
+        canvas.height = SIZE
+        const ctx = canvas.getContext('2d')
+        if (!ctx) { settled = true; cleanup(); resolve(null); return }
+        ctx.drawImage(img, 0, 0, SIZE, SIZE)
+        canvas.toBlob((b) => {
+          settled = true
+          cleanup()
+          resolve(b)
+        }, 'image/png')
+      } catch (e) {
+        settled = true
+        cleanup()
+        console.warn('[recon] satellite canvas error', e)
+        resolve(null)
+      }
+    }
+    img.onerror = () => {
+      if (settled) return
+      settled = true
+      cleanup()
+      resolve(null)
+    }
+    img.src = url
+  })
 }
 
 // ─── Geometry helpers ─────────────────────────────────────────────────────────
@@ -844,8 +899,10 @@ export interface SolarRoofViewerProps {
   /** When provided, a successful spec-driven reconstruction will be persisted
    *  against this report id and an optimistic preview is shown while it runs. */
   reportId?: string
-  /** Pre-existing reconstructed GLB URL; shown immediately if provided. */
+  /** Pre-existing reconstructed GLB URL (roof-corrected); shown immediately if provided. */
   reconstructedModelUrl?: string | null
+  /** Pre-existing raw Meshy GLB URL; shown as the toggled "Meshy raw" view when present. */
+  reconstructedModelRawUrl?: string | null
 }
 
 type ViewTab = '3d' | 'heatmap' | 'panels' | 'satellite' | 'geotiff'
@@ -859,16 +916,19 @@ export function SolarRoofViewer({
   onCapture,
   reportId,
   reconstructedModelUrl,
+  reconstructedModelRawUrl,
 }: SolarRoofViewerProps) {
   const [tab, setTab] = useState<ViewTab>('3d')
   const [showLabels, setShowLabels] = useState(true)
   const captureRef = useRef<(() => Promise<string>) | null>(null)
   const mapsKey = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY
 
-  // Reconstruction state (Levels 0-5 spec-driven pipeline)
-  const [reconstructedSource, setReconstructedSource] = useState<Blob | string | null>(
-    reconstructedModelUrl ?? null,
-  )
+  // Reconstruction state (Meshy + corrected-roof pipeline)
+  const initialSource: ModelSourceProp =
+    reconstructedModelUrl && reconstructedModelRawUrl
+      ? { corrected: reconstructedModelUrl, raw: reconstructedModelRawUrl }
+      : (reconstructedModelUrl ?? null)
+  const [reconstructedSource, setReconstructedSource] = useState<ModelSourceProp>(initialSource)
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [reconProgress, setReconProgress] = useState<ReconstructionProgress | null>(null)
   const reconAbortRef = useRef<AbortController | null>(null)
@@ -932,14 +992,30 @@ export function SolarRoofViewer({
           return
         }
 
-        // PHASE 2: spec generation
+        // PHASE 2: client-side satellite capture
         const specInputs = captureResult.specInputs
         const specPathId = reportId ?? `scratch-${Date.now()}`
+
+        setReconProgress({
+          phase: 'cleaning-images',
+          progress: 0,
+          message: 'Capturing satellite image...',
+        })
+        const satelliteBlob = await captureSatelliteBlob(lat, lng, mapsKey, ctl.signal)
+        if (ctl.signal.aborted) return
+        if (!satelliteBlob) {
+          console.warn('[recon] satellite capture failed; staying on cropped tile mesh')
+          if (reportId) persistGlb(reportId, captureResult.glb, ctl.signal)
+          return
+        }
 
         const fd = new FormData()
         fd.append('front', specInputs.front.blob, 'front.png')
         fd.append('right', specInputs.right.blob, 'right.png')
         fd.append('back', specInputs.back.blob, 'back.png')
+        fd.append('left', specInputs.left.blob, 'left.png')
+        fd.append('topDown', specInputs.topDown.blob, 'topDown.png')
+        fd.append('satellite', satelliteBlob, 'satellite.png')
         fd.append('footprint', JSON.stringify(osBuilding.footprintPolygon))
         fd.append('roofSegments', JSON.stringify(
           (insights.solarPotential.roofSegmentStats ?? []).map((s) => ({
@@ -953,69 +1029,52 @@ export function SolarRoofViewer({
         fd.append('eaveHeightM', String(osBuilding.eaveHeightM ?? 5.8))
         fd.append('dimensionsM', JSON.stringify(specInputs.dimensionsM))
 
-        let spec: BuildingSpec
+        // PHASE 3-4: Nano Banana + Meshy + roof correction (server-side)
+        setReconProgress({
+          phase: 'mesh-generation',
+          progress: 0,
+          message: 'Generating 3D mesh — this can take up to two minutes...',
+        })
         try {
-          const resp = await fetch(`/api/report/${specPathId}/reconstruction/spec`, {
+          const resp = await fetch(`/api/report/${specPathId}/reconstruction/generate`, {
             method: 'POST',
             body: fd,
             signal: ctl.signal,
           })
-          if (!resp.ok) throw new Error(`spec endpoint returned ${resp.status}`)
-          const json = await resp.json()
-          spec = json.spec as BuildingSpec
-          console.debug('[recon] spec generated', {
+          if (!resp.ok) throw new Error(`generate endpoint returned ${resp.status}`)
+          const json = await resp.json() as {
+            reconstructedModelUrl: string
+            reconstructedModelRawUrl: string
+            cached: boolean
+            source: 'meshy' | 'cache'
+            enhancementsUsedFallback: number
+            roofReplaced: boolean
+          }
+          if (ctl.signal.aborted) return
+
+          setReconProgress({
+            phase: 'correcting-roof',
+            progress: 1,
+            message: json.roofReplaced ? 'Aligning roof from Solar API segments...' : 'Showing raw Meshy mesh...',
+          })
+
+          setReconstructedSource({
+            corrected: json.reconstructedModelUrl,
+            raw: json.reconstructedModelRawUrl,
+          })
+
+          console.debug('[recon] meshy pipeline complete', {
             source: json.source,
             cached: json.cached,
-            confidence: spec.confidence,
+            enhancementsUsedFallback: json.enhancementsUsedFallback,
+            roofReplaced: json.roofReplaced,
           })
         } catch (e) {
           if ((e as Error).name === 'AbortError') throw e
-          console.warn('[recon] spec call failed, staying on cropped tile mesh', e)
+          console.warn('[recon] meshy generate failed, staying on cropped tile mesh', e)
           if (reportId) persistGlb(reportId, captureResult.glb, ctl.signal)
           return
         }
-
-        // PHASE 3+4: render + texture project
-        const footprintLocal = wgs84ToLocalMetres(osBuilding.footprintPolygon, [lng, lat])
-        const rendered = renderSpec({ spec, footprintLocal })
-
-        const projCanvas = document.createElement('canvas')
-        projCanvas.width = 2048
-        projCanvas.height = 2048
-        const projRenderer = new THREE.WebGLRenderer({
-          canvas: projCanvas,
-          preserveDrawingBuffer: true,
-          antialias: false,
-        })
-
-        try {
-          projectTextures({
-            group: rendered.group,
-            captures: [
-              specInputs.front.capture,
-              specInputs.right.capture,
-              specInputs.back.capture,
-              specInputs.left.capture,
-            ],
-            maskGeometry: captureResult.croppedGeometry,
-            renderer: projRenderer,
-            atlasSize: 2048,
-          })
-        } catch (e) {
-          if ((e as Error).name === 'AbortError') throw e
-          console.warn('[recon] texture projection failed; keeping flat materials', e)
-        } finally {
-          projRenderer.dispose()
-        }
-
-        // PHASE 5: export & persist
-        const exportRoot = new THREE.Group()
-        exportRoot.add(rendered.group)
-        const glb = await exportGLB(exportRoot)
-        if (ctl.signal.aborted) return
-
-        setReconstructedSource(glb)
-        if (reportId) persistGlb(reportId, glb, ctl.signal)
       } catch (e) {
         if ((e as Error).name === 'AbortError') return
         console.error('[recon] reconstruction pipeline failed', e)

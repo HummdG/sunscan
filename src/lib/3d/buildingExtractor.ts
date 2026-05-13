@@ -14,6 +14,9 @@ export type ReconstructionPhase =
   | 'exporting'
   | 'ml-reconstruction'
   | 'normalising'
+  | 'cleaning-images'
+  | 'mesh-generation'
+  | 'correcting-roof'
   | 'done'
 
 export interface ReconstructionProgress {
@@ -62,6 +65,8 @@ export interface ReconstructionSpecInputs {
   back: { blob: Blob; capture: CapturedView }
   /** Camera at west, looking east — captures west face */
   left: { blob: Blob; capture: CapturedView }
+  /** Near-vertical top-down capture — shows the roof from above */
+  topDown: { blob: Blob; capture: CapturedView }
   /** Real-world bbox of the cropped tile mesh in metres */
   dimensionsM: { x: number; y: number; z: number }
 }
@@ -91,6 +96,9 @@ const PHASE_WEIGHTS: Record<ReconstructionPhase, number> = {
   // calculation, but kept in the union for type-safe progress reporting).
   'ml-reconstruction': 0,
   normalising: 0,
+  'cleaning-images': 0,
+  'mesh-generation': 0,
+  'correcting-roof': 0,
   done: 0,
 }
 
@@ -356,11 +364,34 @@ export async function reconstructBuilding(input: ReconstructionInput): Promise<R
       const leftBlob = await captureToBlob(mlCaptures[3], tileScene.renderer)
       throwIfAborted()
 
+      // Near-vertical top-down capture for the Meshy pipeline: forces the roof
+      // into the centre of one image at high LOD. Camera sits a few metres off
+      // dead-vertical so 3D Tiles doesn't lose horizontal context entirely.
+      emit('capturing-views', 0.99, 'Capturing top-down view...')
+      const topDownCaptures: CapturedView[] = await captureOrbit(tileScene.renderer, tileScene.scene, {
+        target: mlTarget,
+        radii: [Math.max(2, horizExtent * 0.05)],
+        altitudes: [Math.max(40, horizExtent * 1.8) - mlTarget.y],
+        azimuths: [0],
+        captureSize: 1024,
+        fov: 35,
+        beforeCapture: async () => {
+          for (let i = 0; i < 6; i++) {
+            tileScene.updateTiles()
+            await new Promise(requestAnimationFrame)
+          }
+          throwIfAborted()
+        },
+      })
+      const topDownBlob = await captureToBlob(topDownCaptures[0], tileScene.renderer)
+      throwIfAborted()
+
       specInputs = {
-        front: { blob: frontBlob, capture: mlCaptures[0] },
-        right: { blob: rightBlob, capture: mlCaptures[1] },
-        back:  { blob: backBlob,  capture: mlCaptures[2] },
-        left:  { blob: leftBlob,  capture: mlCaptures[3] },
+        front:   { blob: frontBlob,   capture: mlCaptures[0] },
+        right:   { blob: rightBlob,   capture: mlCaptures[1] },
+        back:    { blob: backBlob,    capture: mlCaptures[2] },
+        left:    { blob: leftBlob,    capture: mlCaptures[3] },
+        topDown: { blob: topDownBlob, capture: topDownCaptures[0] },
         dimensionsM: { x: cdim.x, y: cdim.y, z: cdim.z },
       }
     }
