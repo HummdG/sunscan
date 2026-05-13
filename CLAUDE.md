@@ -18,7 +18,7 @@ npx prisma generate                    # Regenerate Prisma client after schema c
 npx prisma studio                      # Browse DB in browser
 ```
 
-No test suite exists yet.
+Run `npm test` for unit tests (Vitest; pure-function modules only).
 
 ## Architecture
 
@@ -50,7 +50,20 @@ A 5-step wizard (`/survey`) collects an address, electricity bill, **explicit us
 - `src/lib/db.ts` — Prisma singleton with PrismaPg adapter (1 connection per serverless instance).
 
 **3D viewer:**
-`SolarRoofViewer.tsx` uses React Three Fiber. Primary 3D source is **Google Photorealistic 3D Tiles** streamed via the Map Tiles API — set `NEXT_PUBLIC_GOOGLE_MAPS_API_KEY` and enable the *Map Tiles API* in Google Cloud. When tiles fail to load (≥3 `tile-load-error` events) the viewer falls back to a **Google Solar DSM heightmap mesh** (`DsmMesh`) so the building still appears even outside Photorealistic Tiles coverage. The legacy LiDAR / OS NGD / procedural Solar-segment reconstruction modes have been removed: translucent roof-segment overlays and panel-placement rectangles are now composited on top of the photo-textured tiles (or the DSM mesh). The PDF capture path waits up to 800ms for in-flight tiles to land before sampling the WebGL canvas. Three.js convention used throughout: **x = east, z = south** (z is inverted from typical map north-up). The older `Solar3DViewer.tsx` remains in-tree only for legacy reports.
+`SolarRoofViewer.tsx` uses React Three Fiber. The reconstruction pipeline:
+
+1. **Capture** — `reconstructBuilding()` (`src/lib/3d/buildingExtractor.ts`) orbits Google Photorealistic 3D Tiles and produces 5 PNG blobs: front, back, left, right (cardinal drone-eye orbit) and a near-vertical top-down. The 6th view, a Google Maps Static satellite image, is captured client-side via a `crossOrigin="anonymous"` `<img>` → canvas → `toBlob()` in `SolarRoofViewer.tsx`.
+2. **Enhance** — All 6 PNGs are sent to **Google Gemini 2.5 Flash Image ("Nano Banana")** via `src/lib/ai/nanoBananaClient.ts` with a "do not invent features" prompt. Per-image fallback to the original on failure. Concurrency 2 with 250ms jitter; Supabase-backed per-image cache (`sunscan-reports/nano-banana/{sha256(rawPng)}.png`).
+3. **Mesh** — The front cardinal photo (south-facing) is sent to **Meshy direct API** at `https://api.meshy.ai/openapi/v1/image-to-3d` via `src/lib/ai/meshyClient.ts`. We use `meshy-5` by default. The Solar API roof summary is passed as `texture_prompt` (guides texturing only — geometry is determined entirely by the image). We tried fal-ai/meshy/v5/multi-image-to-3d and v6 first; both endpoints are character-only on fal.ai (their schema includes T-pose, rigging height, animation IDs) and reject building photos with `downstream_service_error`. Meshy's own API has no such restriction and is what produces high-quality building reconstructions from a single oblique photo.
+4. **Roof correction** — `src/lib/3d/glbRoofCorrector.ts` parses the Meshy GLB with `@gltf-transform/core`, detects roof faces (world-space `normal.y > 0.3`), strips them, builds an authoritative roof via the existing `buildRoof()` helper (`src/lib/3d/specRoof.ts`) using Google Solar API pitch/azimuth/area, aligns it to the deleted-roof eave AABB, and re-exports. On any failure, returns the raw Meshy GLB unmodified.
+5. **Persist + render** — Orchestrated by `/api/report/[id]/reconstruction/generate`. Both the raw and corrected GLBs are uploaded to Supabase (`sunscan-reports/meshy/{cacheKey}.{raw|corrected}.glb`). The corrected URL is also written to the legacy `{id}-reconstruction.glb` path so existing consumers keep working. `Report.reconstructedModelUrl` (corrected) and `reconstructedModelRawUrl` (raw) are updated.
+6. **Viewer toggle** — `ReconstructedModelView.tsx` pre-fetches both GLBs and exposes a "Roof-corrected" / "Meshy raw" segmented toggle. Preference persists via `localStorage['sunscan.reconstruction.modelSource']`.
+
+End-to-end latency target: tile orbit ~30s + Nano Banana ~10s + Meshy ~90s + roof correction ~3s ≈ **130s**. The wizard's optimistic Level-3 cropped-tile preview stays visible during this window.
+
+When `FAL_KEY` is missing, the generate route returns 502 `{ retryable: true }` and the viewer keeps the optimistic preview. When tile capture fails entirely, the viewer falls back to a **Google Solar DSM heightmap mesh** (`DsmMesh`). Three.js convention used throughout: **x = east, z = south**. The older `Solar3DViewer.tsx` remains in-tree only for legacy reports.
+
+The previous Claude-Sonnet-spec → procedural-renderer pipeline (`src/lib/3d/specRenderer.ts`, `src/lib/3d/specTextureProjector.ts`, `src/lib/3d/textureRebaker.ts`, `src/lib/ai/buildingSpecAgent.ts`, `/api/report/[id]/reconstruction/spec`) is `@deprecated` and will be removed after ~2 weeks of validation. `buildRoof()` in `specRoof.ts` is **kept** — it's load-bearing for `glbRoofCorrector.ts`.
 
 ## MCS Solar Calculation
 
@@ -77,6 +90,14 @@ Self-consumption is computed per month from a UK seasonal generation profile and
 | `OS_API_KEY` | Server-side only; omit to disable OS NGD lookup |
 | `MISTRAL_API_KEY` | Server-side only; bill OCR via Mistral. Omit and `/api/bill/parse` returns 503; users must enter the bill manually |
 | `GOOGLE_SOLAR_API_KEY` | Server-side only; used for higher-fidelity roof + panel layout |
+| `ANTHROPIC_API_KEY` | Server-side only. No longer required by the active 3D viewer pipeline (the deprecated `…/reconstruction/spec` route uses it) |
+| `GEMINI_API_KEY` | Server-side only; Nano Banana image enhancement. Unset → enhancement is skipped and originals flow to Meshy (`enhancementsUsedFallback: 6` in the response) |
+| `MESHY_API_KEY` | Server-side only; required for Meshy direct API. Unset → `/api/report/[id]/reconstruction/generate` returns 502 `{ retryable: true }`. Get one at https://www.meshy.ai/api |
+| `MESHY_AI_MODEL` | Optional. Default `meshy-5`. Set to `meshy-4` to use the older model |
+| `FAL_KEY` | Optional now. Kept around because `@fal-ai/client` is still installed for potential future endpoints; not used by the Meshy pipeline (fal-ai/meshy/* is character-only and rejects buildings via `downstream_service_error`) |
+| `SUNSCAN_USE_NANO_BANANA` | Optional. `false` disables Nano Banana cleanup entirely (A/B kill switch) |
+| `SUNSCAN_MESHY_POLYCOUNT` | Optional. Default `30000` |
+| `NEXT_PUBLIC_GOOGLE_MAPS_API_KEY` | Public; enables Google Photorealistic 3D Tiles and the static satellite capture used as the 6th Meshy input |
 | `NEXT_PUBLIC_APP_URL` | e.g. `http://localhost:3000` in dev |
 
 **Mock mode:** Omitting `OS_API_KEY` still returns 5 mock Norwich addresses for autocomplete, but `fetchBuilding()` returns `null` — there is no fake 10×8m fallback. The Review step blocks generation in that case.
