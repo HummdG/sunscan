@@ -33,15 +33,15 @@ export interface MeshyOutput {
   rawGlbUrl: string
 }
 
-// Default to single-image v5: the multi-image variant is tuned for
-// characters/figurines (its schema includes T-pose, rigging height, animation
-// action IDs) and rejects building photos with a downstream_service_error.
-// The single-image endpoint takes any photo and is what produces the
-// high-quality oblique-aerial reconstructions we want.
+// Default to Meshy v6 multi-image: it's the latest Meshy variant on fal.ai
+// (v5 returned downstream_service_error on every building submission,
+// suggesting it's end-of-life or specifically tuned for characters).
+// v5 character-focused fields (is_a_t_pose, rigging_height) are absent
+// from v6's schema, which should accept building photos cleanly.
 //
-// Override via env: MESHY_FAL_ENDPOINT=fal-ai/meshy/v5/multi-image-to-3d to
-// retry the multi-image variant.
-const DEFAULT_ENDPOINT = 'fal-ai/meshy/v5/image-to-3d'
+// Override via env: MESHY_FAL_ENDPOINT=fal-ai/meshy/v5/multi-image-to-3d
+// to retry v5 for comparison.
+const DEFAULT_ENDPOINT = 'fal-ai/meshy/v6/multi-image-to-3d'
 
 function endpoint(): string {
   return process.env.MESHY_FAL_ENDPOINT || DEFAULT_ENDPOINT
@@ -140,6 +140,10 @@ export async function generateGlb(input: MeshyInput): Promise<MeshyOutput> {
     target_polycount: input.targetPolycount ?? defaultPolycount(),
     enable_pbr: input.enablePbr ?? true,
     should_remesh: true,
+    // Buildings sometimes trip Meshy's safety checker (probably car
+    // detection in the satellite frame). Disable so we don't get spurious
+    // downstream_service_error rejections.
+    enable_safety_checker: false,
   } as const
   const imageInput = isMultiImage
     ? { image_urls: imageUrls }
