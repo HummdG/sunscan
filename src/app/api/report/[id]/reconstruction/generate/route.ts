@@ -165,9 +165,9 @@ export async function POST(
     })
   }
 
-  if (!process.env.FAL_KEY) {
+  if (!process.env.MESHY_API_KEY) {
     return NextResponse.json(
-      { error: 'FAL_KEY not configured', retryable: true },
+      { error: 'MESHY_API_KEY not configured', retryable: true },
       { status: 502 },
     )
   }
