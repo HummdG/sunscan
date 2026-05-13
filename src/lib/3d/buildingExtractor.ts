@@ -346,7 +346,12 @@ export async function reconstructBuilding(input: ReconstructionInput): Promise<R
       // distribution Meshy was trained on. Pull back enough that the whole
       // building (including any extensions) fits with margin, and raise
       // the camera above the roof so the elevation angle is ~30° down.
-      const mlRadius = Math.max(horizExtent * 1.6 + 10, 18)
+      //
+      // Empirical: at FOV 55°, distance D fills the frame vertically with
+      // ~D × 1.04 m. We want the building's longest dim to fill ~60% of
+      // the frame, so D ≈ horizExtent / 0.62 ≈ horizExtent * 1.2. Plus
+      // a small floor so very small buildings still get a sensible orbit.
+      const mlRadius = Math.max(horizExtent * 1.2 + 8, 14)
       const mlTarget = ccentre.clone()
       // Camera y = roof top + ~half-radius → atan(0.55) ≈ 28.8° elevation.
       const cameraY = cbb.max.y + mlRadius * 0.55

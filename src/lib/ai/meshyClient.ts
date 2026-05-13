@@ -103,29 +103,58 @@ export async function generateGlb(input: MeshyInput): Promise<MeshyOutput> {
   if (input.images.length === 0) throw new Error('generateGlb requires at least 1 image')
   if (input.images.length > 4) throw new Error('generateGlb accepts at most 4 images')
 
-  const imageUrls = await Promise.all(input.images.map((b) => uploadImage(b)))
+  // Sanity-check inputs before paying for an upload + queue run. fal returns
+  // a generic 500 if anything in image_urls is unreachable or oversized, and
+  // its error body just says "Internal Server Error" — easier to fail fast.
+  for (let i = 0; i < input.images.length; i++) {
+    const buf = input.images[i]
+    if (!buf || buf.length === 0) throw new Error(`Meshy image #${i} is empty`)
+    if (buf.length > 8 * 1024 * 1024) {
+      throw new Error(`Meshy image #${i} is ${buf.length} bytes (>8MB cap)`)
+    }
+  }
+  console.log('[meshy] uploading', input.images.length, 'images, sizes:',
+    input.images.map((b) => b.length))
 
-  const result = (await fal.subscribe(endpoint(), {
-    input: {
-      image_urls: imageUrls,
-      texture_prompt: input.texturePrompt,
-      target_polycount: input.targetPolycount ?? defaultPolycount(),
-      enable_pbr: input.enablePbr ?? true,
-      should_remesh: true,
-    },
-    logs: true,
-    onQueueUpdate: (update: FalQueueUpdate) => {
-      const status = (update.status || '').toUpperCase()
-      const pct = update.progress?.percent ?? update.progress?.progress
-      if (status === 'IN_QUEUE' || status === 'QUEUED') {
-        input.onProgress?.('queued', pct)
-      } else if (status === 'IN_PROGRESS') {
-        input.onProgress?.('in_progress', pct)
-      } else if (status === 'COMPLETED') {
-        input.onProgress?.('completed', 1)
-      }
-    },
-  })) as FalMeshyResult
+  const imageUrls = await Promise.all(input.images.map((b) => uploadImage(b)))
+  console.log('[meshy] image urls:', imageUrls)
+
+  let result: FalMeshyResult
+  try {
+    result = (await fal.subscribe(endpoint(), {
+      input: {
+        image_urls: imageUrls,
+        texture_prompt: input.texturePrompt,
+        target_polycount: input.targetPolycount ?? defaultPolycount(),
+        enable_pbr: input.enablePbr ?? true,
+        should_remesh: true,
+      },
+      logs: true,
+      onQueueUpdate: (update: FalQueueUpdate) => {
+        const status = (update.status || '').toUpperCase()
+        const pct = update.progress?.percent ?? update.progress?.progress
+        if (status === 'IN_QUEUE' || status === 'QUEUED') {
+          input.onProgress?.('queued', pct)
+        } else if (status === 'IN_PROGRESS') {
+          input.onProgress?.('in_progress', pct)
+        } else if (status === 'COMPLETED') {
+          input.onProgress?.('completed', 1)
+        }
+      },
+    })) as FalMeshyResult
+  } catch (err) {
+    // The fal-ai/client ApiError stores the JSON response body on `.body`.
+    // Surface it so we can see the actual validation / generation failure.
+    const body = (err as { body?: unknown }).body
+    const status = (err as { status?: number }).status
+    console.error('[meshy] fal.subscribe failed', {
+      status,
+      endpoint: endpoint(),
+      texturePromptPreview: input.texturePrompt.slice(0, 200),
+      body: body ? JSON.stringify(body, null, 2) : undefined,
+    })
+    throw err
+  }
 
   const glbUrl = result.data.model_glb?.url ?? result.data.model_mesh?.url
   if (!glbUrl) throw new Error('Meshy response did not contain a GLB url')
