@@ -152,6 +152,37 @@ async function downloadGlb(url: string, signal?: AbortSignal): Promise<Buffer> {
   return Buffer.from(await res.arrayBuffer())
 }
 
+/** Messages from Meshy that indicate the task is worth retrying. */
+const TRANSIENT_RETRY_PATTERNS = [
+  /temporarily unavailable/i,
+  /please retry/i,
+  /timeout/i,
+  /service unavailable/i,
+  /internal error/i,
+]
+
+function isTransientMeshyError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err)
+  return TRANSIENT_RETRY_PATTERNS.some((p) => p.test(msg))
+}
+
+async function runOneAttempt(
+  apiKey: string,
+  body: Record<string, unknown>,
+  input: MeshyInput,
+): Promise<MeshyOutput> {
+  const taskId = await createImageToTask(apiKey, body, input.signal)
+  console.log('[meshy] task created:', taskId)
+
+  const task = await pollTaskUntilDone(apiKey, taskId, input.signal, input.onProgress)
+  const glbUrl = task.model_urls?.glb
+  if (!glbUrl) throw new Error('Meshy task succeeded but no model_urls.glb present')
+
+  const glb = await downloadGlb(glbUrl, input.signal)
+  console.log('[meshy] glb downloaded, bytes=', glb.length)
+  return { glb, rawGlbUrl: glbUrl }
+}
+
 export async function generateGlb(input: MeshyInput): Promise<MeshyOutput> {
   const apiKey = process.env.MESHY_API_KEY
   if (!apiKey) throw new Error('MESHY_API_KEY is not set')
@@ -177,23 +208,32 @@ export async function generateGlb(input: MeshyInput): Promise<MeshyOutput> {
     texture_prompt: input.texturePrompt,
   }
 
-  let taskId: string
-  try {
-    taskId = await createImageToTask(apiKey, body, input.signal)
-  } catch (err) {
-    console.error('[meshy] create task failed', {
-      message: (err as Error).message,
-      texturePromptPreview: input.texturePrompt.slice(0, 200),
-    })
-    throw err
+  // Meshy's generation service occasionally fails with "temporarily
+  // unavailable, please retry" on transient infra issues. One retry with
+  // a short backoff is cheap (~$0.10) and saves the user from manually
+  // re-triggering the wizard (which would re-run tile capture and Nano
+  // Banana too).
+  const MAX_ATTEMPTS = 2
+  let lastErr: unknown
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    try {
+      if (attempt > 1) console.warn(`[meshy] retry attempt ${attempt}/${MAX_ATTEMPTS}`)
+      return await runOneAttempt(apiKey, body, input)
+    } catch (err) {
+      lastErr = err
+      if (attempt < MAX_ATTEMPTS && isTransientMeshyError(err)) {
+        const backoffMs = 5_000
+        console.warn(`[meshy] transient error, retrying in ${backoffMs}ms:`, (err as Error).message)
+        await new Promise((r) => setTimeout(r, backoffMs))
+        continue
+      }
+      console.error('[meshy] task failed (no more retries)', {
+        message: (err as Error).message,
+        attempt,
+        texturePromptPreview: input.texturePrompt.slice(0, 200),
+      })
+      throw err
+    }
   }
-  console.log('[meshy] task created:', taskId)
-
-  const task = await pollTaskUntilDone(apiKey, taskId, input.signal, input.onProgress)
-  const glbUrl = task.model_urls?.glb
-  if (!glbUrl) throw new Error('Meshy task succeeded but no model_urls.glb present')
-
-  const glb = await downloadGlb(glbUrl, input.signal)
-  console.log('[meshy] glb downloaded, bytes=', glb.length)
-  return { glb, rawGlbUrl: glbUrl }
+  throw lastErr
 }
