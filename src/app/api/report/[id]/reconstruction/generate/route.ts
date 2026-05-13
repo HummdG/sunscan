@@ -187,11 +187,15 @@ export async function POST(
   // ─── 7. Meshy ──────────────────────────────────────────────────────────────
   let meshyGlb: Buffer
   try {
+    // dimensionsM.y is the vertical extent of the cropped tile mesh and can
+    // pick up trees / antennas / surrounding geometry; clamp it to a sane UK
+    // residential range so the texture_prompt doesn't claim "ridge 33.5m".
+    const clampedRidgeM = Math.min(Math.max(dimensionsM.y, eaveHeightM + 0.5), eaveHeightM + 6)
     const meshyDims = {
       widthM: dimensionsM.x,
       depthM: dimensionsM.z,
       eaveHeightM,
-      ridgeHeightM: dimensionsM.y,
+      ridgeHeightM: clampedRidgeM,
     }
     const meshyRoofSegments: MeshyRoofSegment[] = roofSegments.map((s) => ({
       pitchDeg: s.pitchDeg,

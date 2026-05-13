@@ -14,6 +14,12 @@ export interface MeshyDims {
 }
 
 export interface MeshyInput {
+  /**
+   * 1-4 image buffers. The first image is treated as the primary reference.
+   * If the configured endpoint is single-image (default), only `images[0]`
+   * is sent; the rest are ignored. The multi-image endpoint accepts up to
+   * 4 images via `image_urls`.
+   */
   images: Buffer[]
   texturePrompt: string
   targetPolycount?: number
@@ -27,7 +33,15 @@ export interface MeshyOutput {
   rawGlbUrl: string
 }
 
-const DEFAULT_ENDPOINT = 'fal-ai/meshy/v5/multi-image-to-3d'
+// Default to single-image v5: the multi-image variant is tuned for
+// characters/figurines (its schema includes T-pose, rigging height, animation
+// action IDs) and rejects building photos with a downstream_service_error.
+// The single-image endpoint takes any photo and is what produces the
+// high-quality oblique-aerial reconstructions we want.
+//
+// Override via env: MESHY_FAL_ENDPOINT=fal-ai/meshy/v5/multi-image-to-3d to
+// retry the multi-image variant.
+const DEFAULT_ENDPOINT = 'fal-ai/meshy/v5/image-to-3d'
 
 function endpoint(): string {
   return process.env.MESHY_FAL_ENDPOINT || DEFAULT_ENDPOINT
@@ -103,9 +117,7 @@ export async function generateGlb(input: MeshyInput): Promise<MeshyOutput> {
   if (input.images.length === 0) throw new Error('generateGlb requires at least 1 image')
   if (input.images.length > 4) throw new Error('generateGlb accepts at most 4 images')
 
-  // Sanity-check inputs before paying for an upload + queue run. fal returns
-  // a generic 500 if anything in image_urls is unreachable or oversized, and
-  // its error body just says "Internal Server Error" — easier to fail fast.
+  // Sanity-check inputs before paying for an upload + queue run.
   for (let i = 0; i < input.images.length; i++) {
     const buf = input.images[i]
     if (!buf || buf.length === 0) throw new Error(`Meshy image #${i} is empty`)
@@ -113,22 +125,30 @@ export async function generateGlb(input: MeshyInput): Promise<MeshyOutput> {
       throw new Error(`Meshy image #${i} is ${buf.length} bytes (>8MB cap)`)
     }
   }
-  console.log('[meshy] uploading', input.images.length, 'images, sizes:',
-    input.images.map((b) => b.length))
 
-  const imageUrls = await Promise.all(input.images.map((b) => uploadImage(b)))
+  const ep = endpoint()
+  const isMultiImage = /multi-image-to-3d/.test(ep)
+  const imagesToSend = isMultiImage ? input.images.slice(0, 4) : input.images.slice(0, 1)
+  console.log('[meshy] endpoint:', ep, 'sending', imagesToSend.length, 'images, sizes:',
+    imagesToSend.map((b) => b.length))
+
+  const imageUrls = await Promise.all(imagesToSend.map((b) => uploadImage(b)))
   console.log('[meshy] image urls:', imageUrls)
+
+  const baseInput = {
+    texture_prompt: input.texturePrompt,
+    target_polycount: input.targetPolycount ?? defaultPolycount(),
+    enable_pbr: input.enablePbr ?? true,
+    should_remesh: true,
+  } as const
+  const imageInput = isMultiImage
+    ? { image_urls: imageUrls }
+    : { image_url: imageUrls[0] }
 
   let result: FalMeshyResult
   try {
-    result = (await fal.subscribe(endpoint(), {
-      input: {
-        image_urls: imageUrls,
-        texture_prompt: input.texturePrompt,
-        target_polycount: input.targetPolycount ?? defaultPolycount(),
-        enable_pbr: input.enablePbr ?? true,
-        should_remesh: true,
-      },
+    result = (await fal.subscribe(ep, {
+      input: { ...imageInput, ...baseInput },
       logs: true,
       onQueueUpdate: (update: FalQueueUpdate) => {
         const status = (update.status || '').toUpperCase()
