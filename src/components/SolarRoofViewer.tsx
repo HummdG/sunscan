@@ -8,7 +8,7 @@ import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Button } from '@/components/ui/button'
 import { Camera, AlertTriangle } from 'lucide-react'
-import { wgs84ToLocalMetres } from '@/lib/geometry'
+import { wgs84ToLocalMetres, compassToMcsOrientation } from '@/lib/geometry'
 import { TilesRenderer, WGS84_ELLIPSOID } from '3d-tiles-renderer'
 import { GoogleCloudAuthPlugin } from '3d-tiles-renderer/plugins'
 import type {
@@ -19,8 +19,81 @@ import type {
 } from '@/lib/types'
 import { SolarPanelMesh } from '@/components/solar/SolarPanelMesh'
 import { buildSolar3DModel, DEFAULT_WALL_HEIGHT_M } from '@/lib/solar/solarApiMapper'
-import { computePanelLayouts } from '@/lib/solar/panelPlacementService'
+import { computeOptimisedPanelLayouts } from '@/lib/solar/panelPlacementService'
 import type { PanelLayout, Solar3DModel } from '@/types/solar'
+import { reconstructBuilding, type ReconstructionProgress } from '@/lib/3d/buildingExtractor'
+import { ReconstructedModelView, type ModelSourceProp } from '@/components/solar/ReconstructedModelView'
+
+// ─── Reconstruction helpers ───────────────────────────────────────────────────
+
+async function persistGlb(reportId: string, glb: Blob, signal: AbortSignal): Promise<void> {
+  try {
+    const fd = new FormData()
+    fd.append('glb', glb, 'reconstruction.glb')
+    await fetch(`/api/report/${reportId}/reconstruction`, { method: 'POST', body: fd, signal })
+  } catch (e) {
+    if ((e as Error).name !== 'AbortError') console.warn('Persist GLB failed', e)
+  }
+}
+
+/**
+ * Load the Google Maps Static satellite image client-side, draw it to a
+ * canvas with crossOrigin so the bytes are not tainted, and return the PNG
+ * as a Blob ready for FormData upload.
+ */
+async function captureSatelliteBlob(
+  lat: number,
+  lng: number,
+  mapsKey: string,
+  signal: AbortSignal,
+): Promise<Blob | null> {
+  const SIZE = 640
+  const ZOOM = 20
+  const url = `https://maps.googleapis.com/maps/api/staticmap?center=${lat},${lng}&zoom=${ZOOM}&size=${SIZE}x${SIZE}&maptype=satellite&key=${mapsKey}`
+  return new Promise<Blob | null>((resolve) => {
+    const img = new Image()
+    img.crossOrigin = 'anonymous'
+    let settled = false
+    const cleanup = () => {
+      img.onload = null
+      img.onerror = null
+    }
+    signal.addEventListener('abort', () => {
+      if (settled) return
+      settled = true
+      cleanup()
+      resolve(null)
+    })
+    img.onload = () => {
+      if (settled) return
+      try {
+        const canvas = document.createElement('canvas')
+        canvas.width = SIZE
+        canvas.height = SIZE
+        const ctx = canvas.getContext('2d')
+        if (!ctx) { settled = true; cleanup(); resolve(null); return }
+        ctx.drawImage(img, 0, 0, SIZE, SIZE)
+        canvas.toBlob((b) => {
+          settled = true
+          cleanup()
+          resolve(b)
+        }, 'image/png')
+      } catch (e) {
+        settled = true
+        cleanup()
+        console.warn('[recon] satellite canvas error', e)
+        resolve(null)
+      }
+    }
+    img.onerror = () => {
+      if (settled) return
+      settled = true
+      cleanup()
+      resolve(null)
+    }
+    img.src = url
+  })
+}
 
 // ─── Geometry helpers ─────────────────────────────────────────────────────────
 
@@ -337,9 +410,11 @@ interface SceneProps {
   lng: number
   mapsKey: string | undefined
   solar3DModel: Solar3DModel
+  /** User's chosen capacity; drives the optimised, centred layout. */
+  targetPanelCount?: number
 }
 
-function Scene({ insights, mode, captureRef, showLabels, dsm, lat, lng, mapsKey, solar3DModel }: SceneProps) {
+function Scene({ insights, mode, captureRef, showLabels, dsm, lat, lng, mapsKey, solar3DModel, targetPanelCount }: SceneProps) {
   const { gl, scene, camera } = useThree()
 
   // Primary 3D source = Google Photorealistic 3D Tiles. We only fall back to the
@@ -369,14 +444,22 @@ function Scene({ insights, mode, captureRef, showLabels, dsm, lat, lng, mapsKey,
   const sunMin = sunshineValues.length ? Math.min(...sunshineValues) : 0
   const sunMax = sunshineValues.length ? Math.max(...sunshineValues) : 1
 
-  // Select last config for panels view (max recommended)
+  // Prefer the user's chosen capacity (sunlight-aware, centred optimiser).
+  // Fall back to the max recommended config only when no target is provided.
   const configs = sp.solarPanelConfigs ?? []
-  const panelConfig = configs[configs.length - 1]
+  const fallbackCount = configs[configs.length - 1]?.panelsCount ?? 0
+  const effectiveCount =
+    targetPanelCount && targetPanelCount > 0 ? targetPanelCount : fallbackCount
 
   const panelLayouts: PanelLayout[] = useMemo(() => {
-    if (mode !== 'panels' || !panelConfig) return []
-    return computePanelLayouts(solar3DModel, panelConfig, sp.panelWidthMeters, sp.panelHeightMeters)
-  }, [solar3DModel, panelConfig, mode, sp.panelWidthMeters, sp.panelHeightMeters])
+    if (mode !== 'panels' || effectiveCount <= 0) return []
+    return computeOptimisedPanelLayouts(
+      solar3DModel,
+      effectiveCount,
+      sp.panelWidthMeters,
+      sp.panelHeightMeters,
+    ).layouts
+  }, [solar3DModel, effectiveCount, mode, sp.panelWidthMeters, sp.panelHeightMeters])
 
   const GEOID_UK = 47  // UK geoid offset (EGM2008 → WGS84 ellipsoid)
   // Anchor on Google Solar's reported eave heights when DSM isn't loaded
@@ -823,20 +906,211 @@ export interface SolarRoofViewerProps {
   lng: number
   osBuilding?: OsBuilding | null
   onCapture?: (dataUrl: string) => void
+  /** When provided, a successful spec-driven reconstruction will be persisted
+   *  against this report id and an optimistic preview is shown while it runs. */
+  reportId?: string
+  /** Pre-existing reconstructed GLB URL (roof-corrected); shown immediately if provided. */
+  reconstructedModelUrl?: string | null
+  /** Pre-existing raw Meshy GLB URL; shown as the toggled "Meshy raw" view when present. */
+  reconstructedModelRawUrl?: string | null
+  /** User's chosen panel count; drives the sunlight-aware, centred layout in
+   *  the panels view. Falls back to the max recommended config when absent. */
+  targetPanelCount?: number
 }
 
 type ViewTab = '3d' | 'heatmap' | 'panels' | 'satellite' | 'geotiff'
 
-export function SolarRoofViewer({ insights, dataLayers, lat, lng, osBuilding, onCapture }: SolarRoofViewerProps) {
+export function SolarRoofViewer({
+  insights,
+  dataLayers,
+  lat,
+  lng,
+  osBuilding,
+  onCapture,
+  reportId,
+  reconstructedModelUrl,
+  reconstructedModelRawUrl,
+  targetPanelCount,
+}: SolarRoofViewerProps) {
   const [tab, setTab] = useState<ViewTab>('3d')
   const [showLabels, setShowLabels] = useState(true)
   const captureRef = useRef<(() => Promise<string>) | null>(null)
   const mapsKey = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY
 
+  // Reconstruction state (Meshy + corrected-roof pipeline)
+  const initialSource: ModelSourceProp =
+    reconstructedModelUrl && reconstructedModelRawUrl
+      ? { corrected: reconstructedModelUrl, raw: reconstructedModelRawUrl }
+      : (reconstructedModelUrl ?? null)
+  const [reconstructedSource, setReconstructedSource] = useState<ModelSourceProp>(initialSource)
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const [reconProgress, setReconProgress] = useState<ReconstructionProgress | null>(null)
+  const reconAbortRef = useRef<AbortController | null>(null)
+
+  // Debug strip: object URLs for the raw PNGs we ship to Gemini (Nano
+  // Banana) on the server. Same bytes the server later sends through
+  // `enhanceMany` → `callGemini`. Stored as object URLs so the browser
+  // renders them directly without re-downloading.
+  const [geminiInputs, setGeminiInputs] = useState<{ label: string; url: string }[] | null>(null)
+  useEffect(() => {
+    return () => {
+      if (geminiInputs) for (const i of geminiInputs) URL.revokeObjectURL(i.url)
+    }
+  }, [geminiInputs])
+
+  // Gemini-enhanced outputs. Populated from the /reconstruction/generate
+  // response. These are Supabase signed URLs (not blob URLs), so no
+  // revoke is needed.
+  const [geminiEnhanced, setGeminiEnhanced] = useState<{ label: string; url: string }[] | null>(null)
+
   const { dsm } = useDsm(dataLayers?.dsmId)
   // Bug 2 fix: anchor roof heights to OS eave height rather than hardcoded 3.5m
   const wallH = osBuilding?.eaveHeightM ?? DEFAULT_WALL_HEIGHT_M
   const solar3DModel = useMemo(() => buildSolar3DModel(insights, wallH), [insights, wallH])
+
+  // Ground altitude above the WGS84 ellipsoid at the building. Mirrors the
+  // derivation Scene uses internally for the photoreal tile transform: prefer
+  // the DSM's minimum elevation, fall back to the lowest reported Google Solar
+  // eave (minus a small margin) or a UK low-lying baseline. Apply the EGM2008
+  // geoid offset (≈47m for the UK) to land in ellipsoidal coordinates.
+  const GEOID_UK = 47
+  const groundAltMetres = useMemo(() => {
+    if (dsm) return dsm.minElev + GEOID_UK
+    const segs = insights.solarPotential.roofSegmentStats ?? []
+    if (segs.length) {
+      const minSegEave = Math.min(...segs.map((s) => s.planeHeightAtCenterMeters))
+      return Math.max(0, minSegEave - 3) + GEOID_UK
+    }
+    return GEOID_UK
+  }, [dsm, insights])
+
+  // ── Spec-driven reconstruction pipeline (Levels 0-5) ────────────────────────
+  // Runs once an OS footprint + a Google Maps API key are available. Produces:
+  //   Level 3 (optimistic): cropped tile mesh shown immediately.
+  //   Level 5 (eventual):   spec-rendered procedural mesh, optionally textured
+  //                         by re-projecting the cardinal-view captures.
+  // Aborts on prop change / unmount; never throws past the effect boundary.
+  useEffect(() => {
+    if (!lat || !lng || !osBuilding?.footprintPolygon || !mapsKey) return
+    if (reconstructedModelUrl) return  // already have a persisted model
+
+    const ctl = new AbortController()
+    reconAbortRef.current = ctl
+
+    ;(async () => {
+      try {
+        // PHASE 1: tile capture + photos
+        const captureResult = await reconstructBuilding({
+          lat,
+          lng,
+          footprintPolygon: osBuilding.footprintPolygon,
+          eaveHeightM: osBuilding.eaveHeightM ?? 5.8,
+          groundAltMetres,
+          apiKey: mapsKey,
+          rebakeTextures: false,
+          produceSpecInputs: true,
+          signal: ctl.signal,
+          onProgress: (p) => setReconProgress(p),
+        })
+
+        // Optimistic Level 3 preview: cropped tile mesh while spec runs.
+        setReconstructedSource(captureResult.glb)
+
+        if (!captureResult.specInputs) {
+          console.warn('[recon] no spec inputs; staying on cropped tile mesh')
+          if (reportId) persistGlb(reportId, captureResult.glb, ctl.signal)
+          return
+        }
+
+        const specInputs = captureResult.specInputs
+        const specPathId = reportId ?? `scratch-${Date.now()}`
+
+        // Expose the 2 raw captures (front + back) as the debug strip
+        // input. These are the bytes the server will pass to Gemini
+        // ("Nano Banana") inside `enhanceMany`. Revokes previous URLs.
+        setGeminiInputs((prev) => {
+          if (prev) for (const i of prev) URL.revokeObjectURL(i.url)
+          return [
+            { label: 'front', url: URL.createObjectURL(specInputs.front.blob) },
+            { label: 'back',  url: URL.createObjectURL(specInputs.back.blob) },
+          ]
+        })
+
+        const fd = new FormData()
+        fd.append('front', specInputs.front.blob, 'front.png')
+        fd.append('back',  specInputs.back.blob,  'back.png')
+        fd.append('footprint', JSON.stringify(osBuilding.footprintPolygon))
+        fd.append('roofSegments', JSON.stringify(
+          (insights.solarPotential.roofSegmentStats ?? []).map((s) => ({
+            pitchDeg: s.pitchDegrees,
+            azimuthDeg: compassToMcsOrientation(s.azimuthDegrees),
+            areaM2: s.stats.areaMeters2,
+            centerLng: s.center.longitude,
+            centerLat: s.center.latitude,
+          }))
+        ))
+        fd.append('eaveHeightM', String(osBuilding.eaveHeightM ?? 5.8))
+        fd.append('dimensionsM', JSON.stringify(specInputs.dimensionsM))
+
+        // PHASE 3-4: Nano Banana + Meshy + roof correction (server-side)
+        setReconProgress({
+          phase: 'mesh-generation',
+          progress: 0,
+          message: 'Generating 3D mesh — this can take up to two minutes...',
+        })
+        try {
+          const resp = await fetch(`/api/report/${specPathId}/reconstruction/generate`, {
+            method: 'POST',
+            body: fd,
+            signal: ctl.signal,
+          })
+          if (!resp.ok) throw new Error(`generate endpoint returned ${resp.status}`)
+          const json = await resp.json() as {
+            reconstructedModelUrl: string
+            reconstructedModelRawUrl: string
+            cached: boolean
+            source: 'meshy' | 'cache'
+            enhancementsUsedFallback: number
+            roofReplaced: boolean
+            enhancedImageUrls?: { label: string; url: string }[]
+          }
+          if (ctl.signal.aborted) return
+
+          if (json.enhancedImageUrls && json.enhancedImageUrls.length > 0) {
+            setGeminiEnhanced(json.enhancedImageUrls)
+          }
+
+          setReconProgress({
+            phase: 'correcting-roof',
+            progress: 1,
+            message: json.roofReplaced ? 'Aligning roof from Solar API segments...' : 'Showing raw Meshy mesh...',
+          })
+
+          setReconstructedSource({
+            corrected: json.reconstructedModelUrl,
+            raw: json.reconstructedModelRawUrl,
+          })
+
+          console.debug('[recon] meshy pipeline complete', {
+            source: json.source,
+            cached: json.cached,
+            enhancementsUsedFallback: json.enhancementsUsedFallback,
+            roofReplaced: json.roofReplaced,
+          })
+        } catch (e) {
+          if ((e as Error).name === 'AbortError') throw e
+          console.warn('[recon] meshy generate failed, staying on cropped tile mesh', e)
+          if (reportId) persistGlb(reportId, captureResult.glb, ctl.signal)
+          return
+        }
+      } catch (e) {
+        if ((e as Error).name === 'AbortError') return
+        console.error('[recon] reconstruction pipeline failed', e)
+      }
+    })()
+
+    return () => { ctl.abort() }
+  }, [lat, lng, osBuilding, groundAltMetres, mapsKey, reportId, reconstructedModelUrl])
 
   const segs = insights.solarPotential.roofSegmentStats ?? []
   const geos = segs.map(s => computeSegmentGeo(s, insights.center))
@@ -897,70 +1171,93 @@ export function SolarRoofViewer({ insights, dataLayers, lat, lng, osBuilding, on
         style={{ height: 380, background: '#243A2E' }}
       >
 
-        {/* 3D Canvas — always mounted to preserve orbit state */}
+        {/* 3D Canvas — always mounted to preserve orbit state.
+            On the '3D Model' tab, if a reconstructed model is available it
+            becomes the sole visualization; the live tile Canvas is hidden so
+            the two scenes cannot overlap. */}
         <div
           className="absolute inset-0"
           style={{ display: is3d ? 'block' : 'none' }}
         >
-          <Suspense
-            fallback={
-              <div className="w-full h-full flex items-center justify-center">
-                <Skeleton className="w-full h-full" />
-              </div>
-            }
-          >
-            <Canvas
-              shadows
-              camera={{ position: camPos, fov: 45 }}
-              gl={{ preserveDrawingBuffer: true, antialias: true }}
+          {tab === '3d' && reconstructedSource ? (
+            /* ── Reconstructed model (Level 3+ spec-driven pipeline) ──────── */
+            <ReconstructedModelView
+              source={reconstructedSource}
+              onCapture={onCapture}
+              height={380}
+            />
+          ) : (
+            /* ── Live tile / DSM scene ──────────────────────────────────────── */
+            <Suspense
+              fallback={
+                <div className="w-full h-full flex items-center justify-center">
+                  <Skeleton className="w-full h-full" />
+                </div>
+              }
             >
-              <Scene
-                insights={insights}
-                mode={tab === 'panels' ? 'panels' : tab === 'heatmap' ? 'heatmap' : 'model'}
-                captureRef={captureRef}
-                showLabels={showLabels && (tab === '3d' || tab === 'panels')}
-                dsm={dsm}
-                lat={lat}
-                lng={lng}
-                mapsKey={mapsKey}
-                solar3DModel={solar3DModel}
-              />
-            </Canvas>
-          </Suspense>
+              <Canvas
+                shadows
+                camera={{ position: camPos, fov: 45 }}
+                gl={{ preserveDrawingBuffer: true, antialias: true }}
+              >
+                <Scene
+                  insights={insights}
+                  mode={tab === 'panels' ? 'panels' : tab === 'heatmap' ? 'heatmap' : 'model'}
+                  captureRef={captureRef}
+                  showLabels={showLabels && (tab === '3d' || tab === 'panels')}
+                  dsm={dsm}
+                  lat={lat}
+                  lng={lng}
+                  mapsKey={mapsKey}
+                  solar3DModel={solar3DModel}
+                  targetPanelCount={targetPanelCount}
+                />
+              </Canvas>
+            </Suspense>
+          )}
 
-          {/* 3D overlays */}
+          {/* 3D overlays. CompassRose is useful for both scenes, so it
+              stays. The remaining chrome (drag-to-rotate hint, label
+              toggle, capture button, attribution) is duplicated by
+              ReconstructedModelView's own chrome and would collide with
+              the corrected/raw toggle — so suppress when the
+              reconstructed model is on screen. */}
           {tab === 'heatmap' ? (
             <HeatmapLegend min={sunMin} max={sunMax} />
           ) : (
             <CompassRose />
           )}
 
-          <div className="absolute top-3 left-3 text-xs text-white/80 bg-black/25 rounded px-2 py-0.5">
-            Drag to rotate · Scroll to zoom
-          </div>
+          {!(tab === '3d' && reconstructedSource) && (
+            <>
+              <div className="absolute top-3 left-3 text-xs text-white/80 bg-black/25 rounded px-2 py-0.5">
+                Drag to rotate · Scroll to zoom
+              </div>
 
-          <button
-            onClick={() => setShowLabels(p => !p)}
-            className="absolute top-3 right-20 text-xs bg-white/80 rounded px-2 py-0.5 border border-white/60 hover:bg-white transition-colors"
-          >
-            {showLabels ? 'Hide' : 'Show'} labels
-          </button>
+              <button
+                onClick={() => setShowLabels(p => !p)}
+                className="absolute top-3 right-20 text-xs bg-white/80 rounded px-2 py-0.5 border border-white/60 hover:bg-white transition-colors"
+              >
+                {showLabels ? 'Hide' : 'Show'} labels
+              </button>
 
-          {onCapture && (
-            <Button
-              size="sm"
-              variant="secondary"
-              className="absolute top-3 right-3 gap-1.5 shadow"
-              onClick={handleCapture}
-            >
-              <Camera className="h-3.5 w-3.5" />
-              Capture
-            </Button>
+              {onCapture && (
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  className="absolute top-3 right-3 gap-1.5 shadow"
+                  onClick={handleCapture}
+                >
+                  <Camera className="h-3.5 w-3.5" />
+                  Capture
+                </Button>
+              )}
+
+              <div className="absolute bottom-3 right-3 text-[10px] bg-black/40 text-white/85 rounded px-2 py-0.5">
+                {mapsKey ? 'Google 3D Tiles' : dataLayers?.dsmId ? 'Google Solar DSM' : 'Estimated geometry'}
+              </div>
+            </>
           )}
-
-          <div className="absolute bottom-3 right-3 text-[10px] bg-black/40 text-white/85 rounded px-2 py-0.5">
-            {mapsKey ? 'Google 3D Tiles' : dataLayers?.dsmId ? 'Google Solar DSM' : 'Estimated geometry'}
-          </div>
         </div>
 
         {/* Satellite view */}
@@ -1003,6 +1300,76 @@ export function SolarRoofViewer({ insights, dataLayers, lat, lng, osBuilding, on
           </div>
         ))}
       </div>
+
+      {/* Debug strip: the 2 raw PNGs that get shipped to the server and
+          forwarded to Gemini ("Nano Banana") for enhancement, plus the
+          Gemini-enhanced PNGs (the actual bytes that go to Meshy
+          multi-image-to-3d). Each thumb opens full-size in a new tab. */}
+      {geminiInputs && (
+        <details className="rounded-lg border border-slate-200 bg-slate-50 text-xs" open>
+          <summary className="cursor-pointer select-none px-3 py-1.5 font-medium text-slate-700">
+            Meshy inputs ({geminiInputs.length} raw{geminiEnhanced ? ` + ${geminiEnhanced.length} Gemini-cleaned` : ''})
+          </summary>
+          <div className="space-y-3 px-3 pb-3 pt-1">
+            <div>
+              <div className="text-[10px] uppercase tracking-wide text-slate-500 mb-1">
+                Raw captures (Google 3D Tiles → Gemini)
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {geminiInputs.map((i) => (
+                  <a
+                    key={i.label}
+                    href={i.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex flex-col items-center gap-1 group"
+                    title={`Open ${i.label} full-size`}
+                  >
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={i.url}
+                      alt={i.label}
+                      className="w-24 h-24 object-cover rounded border border-slate-300 group-hover:border-slate-500 transition-colors"
+                    />
+                    <span className="text-[10px] text-slate-600 group-hover:text-slate-900">
+                      {i.label}
+                    </span>
+                  </a>
+                ))}
+              </div>
+            </div>
+            {geminiEnhanced && (
+              <div>
+                <div className="text-[10px] uppercase tracking-wide text-slate-500 mb-1">
+                  Gemini-cleaned (→ Meshy multi-image-to-3d)
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {geminiEnhanced.map((i) => (
+                    <a
+                      key={i.label}
+                      href={i.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="flex flex-col items-center gap-1 group"
+                      title={`Open ${i.label} (enhanced) full-size`}
+                    >
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={i.url}
+                        alt={`${i.label} enhanced`}
+                        className="w-24 h-24 object-cover rounded border border-emerald-300 group-hover:border-emerald-500 transition-colors"
+                      />
+                      <span className="text-[10px] text-emerald-700 group-hover:text-emerald-900">
+                        {i.label}
+                      </span>
+                    </a>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        </details>
+      )}
     </div>
   )
 }

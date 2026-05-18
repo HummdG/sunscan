@@ -33,6 +33,15 @@ export interface OsBuilding {
   /** All building sections from OS NGD, sorted largest first.
    *  Only present when source === 'os_ngd' and multiple parts exist. */
   parts?: BuildingPart[]
+  /** Per-plane roof segment hints, used as auxiliary input for the spec
+   *  generation LLM. Typically derived from GoogleSolar.roofSegmentStats. */
+  roofSegments?: Array<{
+    pitchDeg: number
+    azimuthDeg: number
+    areaM2: number
+    centerLng: number
+    centerLat: number
+  }>
 }
 
 export interface BuildingPart {
@@ -191,6 +200,9 @@ export interface ReportData {
   solarCoveragePercent?: number | null
   imageryQuality?: 'HIGH' | 'MEDIUM' | 'LOW' | null
   mcsGenerationKwh?: number | null
+
+  // Estimated scaffolding (optional — present on the Google Solar path)
+  scaffoldCost?: import('./solar/scaffoldCost').ScaffoldCostResult | null
 
   // Images
   model3dImageUrl: string | null

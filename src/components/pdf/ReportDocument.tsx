@@ -566,6 +566,13 @@ export function ReportDocument({ data, model3dImage }: ReportDocumentProps) {
 
           <Text style={styles.subHeader}>Investment & Payback</Text>
           <DataRow label="System Cost (inc. installation)" value={`£${data.assumptions.systemCostPounds.toLocaleString()}`} />
+          {data.scaffoldCost && (
+            <DataRow
+              label={`Estimated Scaffolding (${data.scaffoldCost.activeElevationCount} elevation${data.scaffoldCost.activeElevationCount === 1 ? '' : 's'})`}
+              value={`£${Math.round(data.scaffoldCost.totalPounds).toLocaleString()}`}
+              estimated
+            />
+          )}
           <DataRow label="Simple Payback Period" value={`${data.results.paybackYears} years`} />
           <DataRow label="25-Year Net Saving" value={`£${(data.results.twentyFiveYearSavings[24]?.cumulative ?? 0).toLocaleString()}`} />
 
