@@ -1,69 +1,45 @@
 import type { GoogleSolarPanelConfig } from '@/lib/types'
-import type { Solar3DModel, LocalRoofSegment, PanelLayout, PlacedPanel, EnrichedRoofPlane, HouseModel } from '@/types/solar'
+import type { Solar3DModel, LocalRoofSegment, PanelLayout, EnrichedRoofPlane, HouseModel } from '@/types/solar'
+import {
+  optimiseLayout,
+  planRectangularBlock,
+  placeBlock,
+  type OptimisedLayout,
+} from '@/lib/solar/layoutOptimiser'
 
-const MARGIN_M  = 0.3
-const GAP_M     = 0.02
-const STANDOFF_M = 0.05
-
+/**
+ * Place up to `requestedCount` panels on a segment. Delegates to the optimiser's
+ * centred rectangular-block placement so every caller gets symmetric arrays and
+ * no ragged final rows. The public `requestedCount` is preserved for callers
+ * that inspect it; `placedCount` is the clean-rectangle count actually placed.
+ */
 export function placePanelsOnSegment(
   seg: LocalRoofSegment,
   panelWidthM: number,
   panelHeightM: number,
   requestedCount: number,
 ): PanelLayout {
-  const azRad   = (seg.azimuthDeg * Math.PI) / 180
-  const pitchRad = (seg.pitchDeg  * Math.PI) / 180
+  const block = planRectangularBlock(seg, panelWidthM, panelHeightM, requestedCount)
+  const layout = placeBlock(seg, panelWidthM, panelHeightM, block)
+  return { ...layout, requestedCount }
+}
 
-  const faceX  =  Math.sin(azRad)
-  const faceZ  = -Math.cos(azRad)
-  const ridgeX =  Math.cos(azRad)
-  const ridgeZ =  Math.sin(azRad)
-
-  const halfRise  = (seg.groundDepthM / 2) * Math.tan(pitchRad)
-  const eaveY     = seg.heightAtCenterM - halfRise
-  const eaveMidX  = seg.center.x + faceX * seg.groundDepthM / 2
-  const eaveMidZ  = seg.center.z + faceZ * seg.groundDepthM / 2
-
-  const slopeLenM   = seg.groundDepthM / Math.cos(pitchRad)
-  const usableRidge = Math.max(0, seg.ridgeLenM  - 2 * MARGIN_M)
-  const usableSlope = Math.max(0, slopeLenM - 2 * MARGIN_M)
-
-  // Landscape: panelWidthM along ridge, panelHeightM down slope
-  const cols = Math.floor((usableRidge + GAP_M) / (panelWidthM  + GAP_M))
-  const rows = Math.floor((usableSlope + GAP_M) / (panelHeightM + GAP_M))
-
-  const startRidge = -(cols * (panelWidthM + GAP_M) - GAP_M) / 2 + panelWidthM / 2
-
-  const panels: PlacedPanel[] = []
-
-  outer: for (let row = 0; row < rows; row++) {
-    for (let col = 0; col < cols; col++) {
-      if (panels.length >= requestedCount) break outer
-
-      const alongRidge = startRidge + col * (panelWidthM + GAP_M)
-      const slopeD     = MARGIN_M + row * (panelHeightM + GAP_M) + panelHeightM / 2
-      const groundD    = slopeD * Math.cos(pitchRad)
-      const riseD      = slopeD * Math.sin(pitchRad)
-
-      const px = eaveMidX + ridgeX * alongRidge - faceX * groundD
-      const py = eaveY    + riseD + STANDOFF_M
-      const pz = eaveMidZ + ridgeZ * alongRidge - faceZ * groundD
-
-      panels.push({
-        segmentIndex: seg.segmentIndex,
-        position: [px, py, pz],
-        rotationY: azRad,
-        pitchRad,
-      })
-    }
-  }
-
-  return {
-    segmentIndex: seg.segmentIndex,
-    panels,
-    requestedCount,
-    placedCount: panels.length,
-  }
+/**
+ * Optimised multi-segment layout: fills the sunniest / best-oriented segments
+ * first with clean centred blocks up to `targetPanelCount`, and returns the
+ * estimated scaffold cost. This is the production entry point.
+ */
+export function computeOptimisedPanelLayouts(
+  model: Solar3DModel,
+  targetPanelCount: number,
+  panelWidthM: number,
+  panelHeightM: number,
+): OptimisedLayout {
+  return optimiseLayout(model.segments, {
+    targetPanelCount,
+    panelWidthM,
+    panelHeightM,
+  })
 }
 
 export function placePanelsOnPlane(
@@ -125,17 +101,21 @@ export function computePanelLayoutsForHouseModel(
   })
 }
 
+/**
+ * Back-compat wrapper. Drives the optimiser from the chosen Google config's
+ * total panel count so existing callers (e.g. SolarRoofViewer) get the
+ * sunlight-aware, centred layout without a signature change.
+ */
 export function computePanelLayouts(
   model: Solar3DModel,
   panelConfig: GoogleSolarPanelConfig,
   panelWidthM: number,
   panelHeightM: number,
 ): PanelLayout[] {
-  return panelConfig.roofSegmentSummaries
-    .map(summary => {
-      const seg = model.segments[summary.segmentIndex]
-      if (!seg) return null
-      return placePanelsOnSegment(seg, panelWidthM, panelHeightM, summary.panelsCount)
-    })
-    .filter((l): l is PanelLayout => l !== null)
+  return computeOptimisedPanelLayouts(
+    model,
+    panelConfig.panelsCount,
+    panelWidthM,
+    panelHeightM,
+  ).layouts
 }

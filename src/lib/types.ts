@@ -201,6 +201,9 @@ export interface ReportData {
   imageryQuality?: 'HIGH' | 'MEDIUM' | 'LOW' | null
   mcsGenerationKwh?: number | null
 
+  // Estimated scaffolding (optional — present on the Google Solar path)
+  scaffoldCost?: import('./solar/scaffoldCost').ScaffoldCostResult | null
+
   // Images
   model3dImageUrl: string | null
   pdfUrl: string | null

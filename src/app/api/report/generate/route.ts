@@ -12,6 +12,9 @@ import {
 } from '@/lib/solarCalculations'
 import { estimateRoofPlanes, getBestRoofPlane, wgs84ToLocalMetres, polygonCentroid, polygonArea } from '@/lib/geometry'
 import { calculatePanelLayout } from '@/lib/panelLayout'
+import { buildSolar3DModel } from '@/lib/solar/solarApiMapper'
+import { computeOptimisedPanelLayouts } from '@/lib/solar/panelPlacementService'
+import type { ScaffoldCostResult } from '@/lib/solar/scaffoldCost'
 import { generateReportPdf, generateQuoteNumber } from '@/lib/reportGenerator'
 import { selectOptimalPanelConfig } from '@/lib/googleSolarApi'
 import { loadCatalogue, CATALOGUE_VERSION } from '@/lib/pricing/catalogueLoader'
@@ -273,6 +276,29 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    // ── 2.6. Optimised panel layout + scaffold estimate (Google path) ─────
+    // Drives the sunlight-aware, centred rectangular-block layout from the
+    // user's finalised panelCount and estimates the scaffold cost. Legacy
+    // path keeps its footprint-derived panelPositions untouched.
+    let scaffoldCost: ScaffoldCostResult | null = null
+    let panelLayoutJsonValue = JSON.stringify(panelPositions)
+    if (solarInsights) {
+      try {
+        const sp = solarInsights.solarPotential
+        const model = buildSolar3DModel(solarInsights)
+        const opt = computeOptimisedPanelLayouts(
+          model,
+          panelCount,
+          sp.panelWidthMeters,
+          sp.panelHeightMeters,
+        )
+        panelLayoutJsonValue = JSON.stringify(opt.layouts)
+        scaffoldCost = opt.scaffold
+      } catch (err) {
+        console.error('Panel layout optimisation failed:', err)
+      }
+    }
+
     // ── 3. Solar calculations ─────────────────────────────────────────────
     let results
 
@@ -334,6 +360,7 @@ export async function POST(request: NextRequest) {
       imageryQuality: imageryQuality as 'HIGH' | 'MEDIUM' | 'LOW' | null,
       mcsGenerationKwh,
       dataConfidence,
+      scaffoldCost,
     }
 
     // ── 5. Save to DB ─────────────────────────────────────────────────────
@@ -372,7 +399,8 @@ export async function POST(request: NextRequest) {
         monthlyGenJson: JSON.stringify(results.monthlyGenKwh),
         twentyFiveYearJson: JSON.stringify(results.twentyFiveYearSavings),
         assumptionsJson: JSON.stringify(assumptions),
-        panelLayoutJson: JSON.stringify(panelPositions),
+        panelLayoutJson: panelLayoutJsonValue,
+        scaffoldCostJson: scaffoldCost ? JSON.stringify(scaffoldCost) : null,
         model3dImageUrl: data.model3dImageBase64
           ? `data:image/png;base64,${data.model3dImageBase64.replace(/^data:image\/\w+;base64,/, '')}`
           : null,

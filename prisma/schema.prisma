@@ -41,6 +41,7 @@ model Report {
   twentyFiveYearJson        String
   assumptionsJson           String
   panelLayoutJson           String   @default("[]")
+  scaffoldCostJson          String?
   model3dImageUrl           String?
   reconstructedModelUrl     String?
   reconstructedModelRawUrl  String?

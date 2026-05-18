@@ -257,6 +257,17 @@ export function ReconstructedModelView({ source, onCapture, height = 380 }: Reco
               <div className="text-[10px] text-white/80 bg-black/30 rounded px-1.5 py-0.5 max-w-[15rem] text-right leading-tight">
                 Corrected: roof rebuilt from Google Solar data. Raw: Meshy AI output.
               </div>
+              {onCapture && (
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  className="gap-1.5 shadow"
+                  onClick={() => { if (captureRef.current) onCapture(captureRef.current()) }}
+                >
+                  <Camera className="h-3.5 w-3.5" />
+                  Capture
+                </Button>
+              )}
             </div>
           )}
 
@@ -265,18 +276,6 @@ export function ReconstructedModelView({ source, onCapture, height = 380 }: Reco
               size="sm"
               variant="secondary"
               className="absolute top-3 right-3 gap-1.5 shadow"
-              onClick={() => { if (captureRef.current) onCapture(captureRef.current()) }}
-            >
-              <Camera className="h-3.5 w-3.5" />
-              Capture
-            </Button>
-          )}
-
-          {onCapture && dual && (
-            <Button
-              size="sm"
-              variant="secondary"
-              className="absolute bottom-3 right-3 gap-1.5 shadow"
               onClick={() => { if (captureRef.current) onCapture(captureRef.current()) }}
             >
               <Camera className="h-3.5 w-3.5" />

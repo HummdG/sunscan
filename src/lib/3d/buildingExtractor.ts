@@ -57,16 +57,13 @@ export interface ReconstructionInput {
 }
 
 export interface ReconstructionSpecInputs {
-  /** Camera at south, looking north — captures south face */
+  /** Camera at south (azimuth 0), looking north — captures the
+   *  street-facing front of the building. */
   front: { blob: Blob; capture: CapturedView }
-  /** Camera at east, looking west — captures east face */
-  right: { blob: Blob; capture: CapturedView }
-  /** Camera at north, looking south — captures north face */
+  /** Camera at north (azimuth π), looking south — same elevation,
+   *  radius, and FOV as `front`, just rotated 180° around the vertical
+   *  axis. Captures the rear of the building. */
   back: { blob: Blob; capture: CapturedView }
-  /** Camera at west, looking east — captures west face */
-  left: { blob: Blob; capture: CapturedView }
-  /** Near-vertical top-down capture — shows the roof from above */
-  topDown: { blob: Blob; capture: CapturedView }
   /** Real-world bbox of the cropped tile mesh in metres */
   dimensionsM: { x: number; y: number; z: number }
 }
@@ -224,9 +221,20 @@ export async function reconstructBuilding(input: ReconstructionInput): Promise<R
       altitudes,
       azimuths,
       captureSize: 1024,
-      beforeCapture: async () => {
-        // Re-tick tile updates so the renderer streams in any new chunks visible
-        // from the upcoming pose.
+      beforeCapture: async ({ altitude, radius, azimuth }) => {
+        // Sync the tile-streaming camera to the upcoming capture pose so
+        // TilesRenderer.update() actually streams the right tiles. Same
+        // bug as the spec-capture orbit below — without this, tiles only
+        // load for whichever pose the streaming camera happens to face.
+        const x = target.x + Math.sin(azimuth) * radius
+        const z = target.z + Math.cos(azimuth) * radius
+        const y = target.y + altitude
+        tileScene.camera.position.set(x, y, z)
+        tileScene.camera.lookAt(target)
+        tileScene.camera.updateMatrixWorld(true)
+        // Keep the cheap 4-tick budget here — 48 views × any larger wait
+        // would balloon latency. The per-view quality matters less for
+        // texture re-bake than for the spec capture.
         for (let i = 0; i < 4; i++) {
           tileScene.updateTiles()
           await new Promise(requestAnimationFrame)
@@ -356,7 +364,16 @@ export async function reconstructBuilding(input: ReconstructionInput): Promise<R
       // Camera y = roof top + ~half-radius → atan(0.55) ≈ 28.8° elevation.
       const cameraY = cbb.max.y + mlRadius * 0.55
       const mlAltitude = cameraY
-      const azimuths = [0, Math.PI / 2, Math.PI, (3 * Math.PI) / 2]
+      // Two captures: front (south) and back (north). Same elevation,
+      // radius, and FOV — back is just front rotated 180° around the
+      // vertical axis. We dropped east/west/topDown captures because
+      // (a) Meshy multi-image-to-3d works best with opposing views,
+      // (b) Google 3D Tiles source data on perpendicular sides of UK
+      // residential buildings is unusable.
+      const azimuths = [0, Math.PI]
+      // FOV 45° (down from 55°) zooms the building in a bit so it
+      // fills more of the frame.
+      const captureFov = 45
 
       const mlCaptures: CapturedView[] = await captureOrbit(tileScene.renderer, tileScene.scene, {
         target: mlTarget,
@@ -364,12 +381,27 @@ export async function reconstructBuilding(input: ReconstructionInput): Promise<R
         altitudes: [mlAltitude - mlTarget.y],  // helper adds target.y; net y = mlAltitude
         azimuths,
         captureSize: 1024,
-        fov: 55,
-        beforeCapture: async () => {
-          for (let i = 0; i < 3; i++) {
-            tileScene.updateTiles()
-            await new Promise(requestAnimationFrame)
-          }
+        fov: captureFov,
+        beforeCapture: async ({ altitude, radius, azimuth }) => {
+          // Critical: the TilesRenderer streams tiles based on
+          // `tileScene.camera`, not the capture orbit's internal camera.
+          // Without syncing the streaming camera to the upcoming pose,
+          // only one of the two captures sees streamed tiles — the
+          // other renders dark voids or low-LOD mesh.
+          const x = mlTarget.x + Math.sin(azimuth) * radius
+          const z = mlTarget.z + Math.cos(azimuth) * radius
+          const y = mlTarget.y + altitude
+          tileScene.camera.position.set(x, y, z)
+          tileScene.camera.lookAt(mlTarget)
+          tileScene.camera.fov = captureFov
+          tileScene.camera.updateProjectionMatrix()
+          tileScene.camera.updateMatrixWorld(true)
+
+          await tileScene.waitForSettle({
+            timeoutMs: 3_000,
+            quietMs: 700,
+            minMeshes: 1,
+          })
           throwIfAborted()
         },
       })
@@ -378,47 +410,18 @@ export async function reconstructBuilding(input: ReconstructionInput): Promise<R
         target: mlTarget.toArray(),
         radius: mlRadius,
         altitude: mlAltitude,
+        fov: captureFov,
         bboxSize: cdim.toArray(),
       })
 
-      // azimuth convention: cap[0]=south (front), [1]=east (right), [2]=north (back), [3]=west (left)
       const frontBlob = await captureToBlob(mlCaptures[0], tileScene.renderer)
       throwIfAborted()
-      const rightBlob = await captureToBlob(mlCaptures[1], tileScene.renderer)
-      throwIfAborted()
-      const backBlob = await captureToBlob(mlCaptures[2], tileScene.renderer)
-      throwIfAborted()
-      const leftBlob = await captureToBlob(mlCaptures[3], tileScene.renderer)
-      throwIfAborted()
-
-      // Near-vertical top-down capture for the Meshy pipeline: forces the roof
-      // into the centre of one image at high LOD. Camera sits a few metres off
-      // dead-vertical so 3D Tiles doesn't lose horizontal context entirely.
-      emit('capturing-views', 0.99, 'Capturing top-down view...')
-      const topDownCaptures: CapturedView[] = await captureOrbit(tileScene.renderer, tileScene.scene, {
-        target: mlTarget,
-        radii: [Math.max(2, horizExtent * 0.05)],
-        altitudes: [Math.max(40, horizExtent * 1.8) - mlTarget.y],
-        azimuths: [0],
-        captureSize: 1024,
-        fov: 35,
-        beforeCapture: async () => {
-          for (let i = 0; i < 6; i++) {
-            tileScene.updateTiles()
-            await new Promise(requestAnimationFrame)
-          }
-          throwIfAborted()
-        },
-      })
-      const topDownBlob = await captureToBlob(topDownCaptures[0], tileScene.renderer)
+      const backBlob = await captureToBlob(mlCaptures[1], tileScene.renderer)
       throwIfAborted()
 
       specInputs = {
-        front:   { blob: frontBlob,   capture: mlCaptures[0] },
-        right:   { blob: rightBlob,   capture: mlCaptures[1] },
-        back:    { blob: backBlob,    capture: mlCaptures[2] },
-        left:    { blob: leftBlob,    capture: mlCaptures[3] },
-        topDown: { blob: topDownBlob, capture: topDownCaptures[0] },
+        front: { blob: frontBlob, capture: mlCaptures[0] },
+        back:  { blob: backBlob,  capture: mlCaptures[1] },
         dimensionsM: { x: cdim.x, y: cdim.y, z: cdim.z },
       }
     }

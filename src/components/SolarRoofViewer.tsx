@@ -19,7 +19,7 @@ import type {
 } from '@/lib/types'
 import { SolarPanelMesh } from '@/components/solar/SolarPanelMesh'
 import { buildSolar3DModel, DEFAULT_WALL_HEIGHT_M } from '@/lib/solar/solarApiMapper'
-import { computePanelLayouts } from '@/lib/solar/panelPlacementService'
+import { computeOptimisedPanelLayouts } from '@/lib/solar/panelPlacementService'
 import type { PanelLayout, Solar3DModel } from '@/types/solar'
 import { reconstructBuilding, type ReconstructionProgress } from '@/lib/3d/buildingExtractor'
 import { ReconstructedModelView, type ModelSourceProp } from '@/components/solar/ReconstructedModelView'
@@ -410,9 +410,11 @@ interface SceneProps {
   lng: number
   mapsKey: string | undefined
   solar3DModel: Solar3DModel
+  /** User's chosen capacity; drives the optimised, centred layout. */
+  targetPanelCount?: number
 }
 
-function Scene({ insights, mode, captureRef, showLabels, dsm, lat, lng, mapsKey, solar3DModel }: SceneProps) {
+function Scene({ insights, mode, captureRef, showLabels, dsm, lat, lng, mapsKey, solar3DModel, targetPanelCount }: SceneProps) {
   const { gl, scene, camera } = useThree()
 
   // Primary 3D source = Google Photorealistic 3D Tiles. We only fall back to the
@@ -442,14 +444,22 @@ function Scene({ insights, mode, captureRef, showLabels, dsm, lat, lng, mapsKey,
   const sunMin = sunshineValues.length ? Math.min(...sunshineValues) : 0
   const sunMax = sunshineValues.length ? Math.max(...sunshineValues) : 1
 
-  // Select last config for panels view (max recommended)
+  // Prefer the user's chosen capacity (sunlight-aware, centred optimiser).
+  // Fall back to the max recommended config only when no target is provided.
   const configs = sp.solarPanelConfigs ?? []
-  const panelConfig = configs[configs.length - 1]
+  const fallbackCount = configs[configs.length - 1]?.panelsCount ?? 0
+  const effectiveCount =
+    targetPanelCount && targetPanelCount > 0 ? targetPanelCount : fallbackCount
 
   const panelLayouts: PanelLayout[] = useMemo(() => {
-    if (mode !== 'panels' || !panelConfig) return []
-    return computePanelLayouts(solar3DModel, panelConfig, sp.panelWidthMeters, sp.panelHeightMeters)
-  }, [solar3DModel, panelConfig, mode, sp.panelWidthMeters, sp.panelHeightMeters])
+    if (mode !== 'panels' || effectiveCount <= 0) return []
+    return computeOptimisedPanelLayouts(
+      solar3DModel,
+      effectiveCount,
+      sp.panelWidthMeters,
+      sp.panelHeightMeters,
+    ).layouts
+  }, [solar3DModel, effectiveCount, mode, sp.panelWidthMeters, sp.panelHeightMeters])
 
   const GEOID_UK = 47  // UK geoid offset (EGM2008 → WGS84 ellipsoid)
   // Anchor on Google Solar's reported eave heights when DSM isn't loaded
@@ -903,6 +913,9 @@ export interface SolarRoofViewerProps {
   reconstructedModelUrl?: string | null
   /** Pre-existing raw Meshy GLB URL; shown as the toggled "Meshy raw" view when present. */
   reconstructedModelRawUrl?: string | null
+  /** User's chosen panel count; drives the sunlight-aware, centred layout in
+   *  the panels view. Falls back to the max recommended config when absent. */
+  targetPanelCount?: number
 }
 
 type ViewTab = '3d' | 'heatmap' | 'panels' | 'satellite' | 'geotiff'
@@ -917,6 +930,7 @@ export function SolarRoofViewer({
   reportId,
   reconstructedModelUrl,
   reconstructedModelRawUrl,
+  targetPanelCount,
 }: SolarRoofViewerProps) {
   const [tab, setTab] = useState<ViewTab>('3d')
   const [showLabels, setShowLabels] = useState(true)
@@ -932,6 +946,22 @@ export function SolarRoofViewer({
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [reconProgress, setReconProgress] = useState<ReconstructionProgress | null>(null)
   const reconAbortRef = useRef<AbortController | null>(null)
+
+  // Debug strip: object URLs for the raw PNGs we ship to Gemini (Nano
+  // Banana) on the server. Same bytes the server later sends through
+  // `enhanceMany` → `callGemini`. Stored as object URLs so the browser
+  // renders them directly without re-downloading.
+  const [geminiInputs, setGeminiInputs] = useState<{ label: string; url: string }[] | null>(null)
+  useEffect(() => {
+    return () => {
+      if (geminiInputs) for (const i of geminiInputs) URL.revokeObjectURL(i.url)
+    }
+  }, [geminiInputs])
+
+  // Gemini-enhanced outputs. Populated from the /reconstruction/generate
+  // response. These are Supabase signed URLs (not blob URLs), so no
+  // revoke is needed.
+  const [geminiEnhanced, setGeminiEnhanced] = useState<{ label: string; url: string }[] | null>(null)
 
   const { dsm } = useDsm(dataLayers?.dsmId)
   // Bug 2 fix: anchor roof heights to OS eave height rather than hardcoded 3.5m
@@ -992,30 +1022,23 @@ export function SolarRoofViewer({
           return
         }
 
-        // PHASE 2: client-side satellite capture
         const specInputs = captureResult.specInputs
         const specPathId = reportId ?? `scratch-${Date.now()}`
 
-        setReconProgress({
-          phase: 'cleaning-images',
-          progress: 0,
-          message: 'Capturing satellite image...',
+        // Expose the 2 raw captures (front + back) as the debug strip
+        // input. These are the bytes the server will pass to Gemini
+        // ("Nano Banana") inside `enhanceMany`. Revokes previous URLs.
+        setGeminiInputs((prev) => {
+          if (prev) for (const i of prev) URL.revokeObjectURL(i.url)
+          return [
+            { label: 'front', url: URL.createObjectURL(specInputs.front.blob) },
+            { label: 'back',  url: URL.createObjectURL(specInputs.back.blob) },
+          ]
         })
-        const satelliteBlob = await captureSatelliteBlob(lat, lng, mapsKey, ctl.signal)
-        if (ctl.signal.aborted) return
-        if (!satelliteBlob) {
-          console.warn('[recon] satellite capture failed; staying on cropped tile mesh')
-          if (reportId) persistGlb(reportId, captureResult.glb, ctl.signal)
-          return
-        }
 
         const fd = new FormData()
         fd.append('front', specInputs.front.blob, 'front.png')
-        fd.append('right', specInputs.right.blob, 'right.png')
-        fd.append('back', specInputs.back.blob, 'back.png')
-        fd.append('left', specInputs.left.blob, 'left.png')
-        fd.append('topDown', specInputs.topDown.blob, 'topDown.png')
-        fd.append('satellite', satelliteBlob, 'satellite.png')
+        fd.append('back',  specInputs.back.blob,  'back.png')
         fd.append('footprint', JSON.stringify(osBuilding.footprintPolygon))
         fd.append('roofSegments', JSON.stringify(
           (insights.solarPotential.roofSegmentStats ?? []).map((s) => ({
@@ -1049,8 +1072,13 @@ export function SolarRoofViewer({
             source: 'meshy' | 'cache'
             enhancementsUsedFallback: number
             roofReplaced: boolean
+            enhancedImageUrls?: { label: string; url: string }[]
           }
           if (ctl.signal.aborted) return
+
+          if (json.enhancedImageUrls && json.enhancedImageUrls.length > 0) {
+            setGeminiEnhanced(json.enhancedImageUrls)
+          }
 
           setReconProgress({
             phase: 'correcting-roof',
@@ -1182,44 +1210,54 @@ export function SolarRoofViewer({
                   lng={lng}
                   mapsKey={mapsKey}
                   solar3DModel={solar3DModel}
+                  targetPanelCount={targetPanelCount}
                 />
               </Canvas>
             </Suspense>
           )}
 
-          {/* 3D overlays */}
+          {/* 3D overlays. CompassRose is useful for both scenes, so it
+              stays. The remaining chrome (drag-to-rotate hint, label
+              toggle, capture button, attribution) is duplicated by
+              ReconstructedModelView's own chrome and would collide with
+              the corrected/raw toggle — so suppress when the
+              reconstructed model is on screen. */}
           {tab === 'heatmap' ? (
             <HeatmapLegend min={sunMin} max={sunMax} />
           ) : (
             <CompassRose />
           )}
 
-          <div className="absolute top-3 left-3 text-xs text-white/80 bg-black/25 rounded px-2 py-0.5">
-            Drag to rotate · Scroll to zoom
-          </div>
+          {!(tab === '3d' && reconstructedSource) && (
+            <>
+              <div className="absolute top-3 left-3 text-xs text-white/80 bg-black/25 rounded px-2 py-0.5">
+                Drag to rotate · Scroll to zoom
+              </div>
 
-          <button
-            onClick={() => setShowLabels(p => !p)}
-            className="absolute top-3 right-20 text-xs bg-white/80 rounded px-2 py-0.5 border border-white/60 hover:bg-white transition-colors"
-          >
-            {showLabels ? 'Hide' : 'Show'} labels
-          </button>
+              <button
+                onClick={() => setShowLabels(p => !p)}
+                className="absolute top-3 right-20 text-xs bg-white/80 rounded px-2 py-0.5 border border-white/60 hover:bg-white transition-colors"
+              >
+                {showLabels ? 'Hide' : 'Show'} labels
+              </button>
 
-          {onCapture && (
-            <Button
-              size="sm"
-              variant="secondary"
-              className="absolute top-3 right-3 gap-1.5 shadow"
-              onClick={handleCapture}
-            >
-              <Camera className="h-3.5 w-3.5" />
-              Capture
-            </Button>
+              {onCapture && (
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  className="absolute top-3 right-3 gap-1.5 shadow"
+                  onClick={handleCapture}
+                >
+                  <Camera className="h-3.5 w-3.5" />
+                  Capture
+                </Button>
+              )}
+
+              <div className="absolute bottom-3 right-3 text-[10px] bg-black/40 text-white/85 rounded px-2 py-0.5">
+                {mapsKey ? 'Google 3D Tiles' : dataLayers?.dsmId ? 'Google Solar DSM' : 'Estimated geometry'}
+              </div>
+            </>
           )}
-
-          <div className="absolute bottom-3 right-3 text-[10px] bg-black/40 text-white/85 rounded px-2 py-0.5">
-            {mapsKey ? 'Google 3D Tiles' : dataLayers?.dsmId ? 'Google Solar DSM' : 'Estimated geometry'}
-          </div>
         </div>
 
         {/* Satellite view */}
@@ -1262,6 +1300,76 @@ export function SolarRoofViewer({
           </div>
         ))}
       </div>
+
+      {/* Debug strip: the 2 raw PNGs that get shipped to the server and
+          forwarded to Gemini ("Nano Banana") for enhancement, plus the
+          Gemini-enhanced PNGs (the actual bytes that go to Meshy
+          multi-image-to-3d). Each thumb opens full-size in a new tab. */}
+      {geminiInputs && (
+        <details className="rounded-lg border border-slate-200 bg-slate-50 text-xs" open>
+          <summary className="cursor-pointer select-none px-3 py-1.5 font-medium text-slate-700">
+            Meshy inputs ({geminiInputs.length} raw{geminiEnhanced ? ` + ${geminiEnhanced.length} Gemini-cleaned` : ''})
+          </summary>
+          <div className="space-y-3 px-3 pb-3 pt-1">
+            <div>
+              <div className="text-[10px] uppercase tracking-wide text-slate-500 mb-1">
+                Raw captures (Google 3D Tiles → Gemini)
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {geminiInputs.map((i) => (
+                  <a
+                    key={i.label}
+                    href={i.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex flex-col items-center gap-1 group"
+                    title={`Open ${i.label} full-size`}
+                  >
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={i.url}
+                      alt={i.label}
+                      className="w-24 h-24 object-cover rounded border border-slate-300 group-hover:border-slate-500 transition-colors"
+                    />
+                    <span className="text-[10px] text-slate-600 group-hover:text-slate-900">
+                      {i.label}
+                    </span>
+                  </a>
+                ))}
+              </div>
+            </div>
+            {geminiEnhanced && (
+              <div>
+                <div className="text-[10px] uppercase tracking-wide text-slate-500 mb-1">
+                  Gemini-cleaned (→ Meshy multi-image-to-3d)
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {geminiEnhanced.map((i) => (
+                    <a
+                      key={i.label}
+                      href={i.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="flex flex-col items-center gap-1 group"
+                      title={`Open ${i.label} (enhanced) full-size`}
+                    >
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={i.url}
+                        alt={`${i.label} enhanced`}
+                        className="w-24 h-24 object-cover rounded border border-emerald-300 group-hover:border-emerald-500 transition-colors"
+                      />
+                      <span className="text-[10px] text-emerald-700 group-hover:text-emerald-900">
+                        {i.label}
+                      </span>
+                    </a>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        </details>
+      )}
     </div>
   )
 }

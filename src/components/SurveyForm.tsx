@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useRef, useCallback } from 'react'
+import { useState, useRef, useCallback, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -20,6 +20,7 @@ import type {
 } from '@/lib/types'
 import type { TierPresetSummary, RoofType } from '@/lib/pricing/types'
 import { DEFAULT_ASSUMPTIONS } from '@/lib/solarCalculations'
+import { selectOptimalPanelConfig } from '@/lib/googleSolarApi'
 
 interface BillData {
   annualKwh: number
@@ -305,6 +306,18 @@ export function SurveyForm() {
 
   // Assumptions (updated from Solar API best segment)
   const [assumptions, setAssumptions] = useState<SolarAssumptions>(DEFAULT_ASSUMPTIONS)
+
+  // Panel count the user's consumption actually warrants — drives the
+  // optimised, centred layout preview (not the max recommended array).
+  const targetPanelCount = useMemo(() => {
+    if (!solarInsights) return undefined
+    return selectOptimalPanelConfig(
+      solarInsights.solarPotential.solarPanelConfigs,
+      billData.annualKwh,
+      assumptions.inverterLoss,
+      assumptions.systemLoss,
+    )?.panelsCount
+  }, [solarInsights, billData.annualKwh, assumptions.inverterLoss, assumptions.systemLoss])
 
   // Tier presets (loaded after bill step)
   const [tierPresets, setTierPresets] = useState<TierPresetSummary[] | null>(null)
@@ -600,6 +613,7 @@ export function SurveyForm() {
                       lat={selectedAddress.lat}
                       lng={selectedAddress.lng}
                       osBuilding={osBuilding}
+                      targetPanelCount={targetPanelCount}
                       onCapture={(dataUrl) => { capturedModel3dRef.current = dataUrl }}
                     />
                   )}

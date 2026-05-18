@@ -4,7 +4,7 @@ import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import { prisma } from '@/lib/db'
 import { wgs84ToLocalMetres } from '@/lib/geometry'
 import { enhanceMany, type EnhanceLabel } from '@/lib/ai/nanoBananaClient'
-import { generateGlb, buildTexturePrompt, type MeshyRoofSegment } from '@/lib/ai/meshyClient'
+import { generateGlb, buildTexturePrompt } from '@/lib/ai/meshyClient'
 import { replaceRoofInGlb, type RoofSegmentLocal } from '@/lib/3d/glbRoofCorrector'
 
 export const runtime = 'nodejs'
@@ -14,20 +14,12 @@ const MAX_IMAGE_BYTES = 8 * 1024 * 1024
 const SIGNED_URL_TTL_SECONDS = 60 * 60 * 24 * 30
 const SUPABASE_BUCKET = 'sunscan-reports'
 
-/** Order matters: the 4 selected indices are picked from this array. */
-const ALL_LABELS: EnhanceLabel[] = ['front', 'back', 'left', 'right', 'topDown', 'satellite']
-
-/**
- * Indices into ALL_LABELS to send to Meshy.
- *
- * The 4 cardinal high-oblique drone-eye captures are the best diet for an
- * image-to-3D model: each view shows roof + walls in perspective, the same
- * distribution Meshy was trained on. We deliberately do NOT send the
- * top-down or the Google Maps Static satellite blob, because both are
- * orthographic/flat — Meshy interprets them as ground planes and produces
- * a giant flat sheet with a tiny crumpled blob on top.
- */
-const MESHY_VIEW_SELECTION: readonly EnhanceLabel[] = ['front', 'right', 'back', 'left']
+/** Order matters: corresponds to the FormData keys the client sends and
+ *  to the image_urls order sent to Meshy. Both views are enhanced by
+ *  Gemini (Nano Banana) and both are sent to Meshy's
+ *  /openapi/v1/multi-image-to-3d endpoint for opposing-view 3D
+ *  reconstruction. */
+const ALL_LABELS: EnhanceLabel[] = ['front', 'back']
 
 interface InputRoofSegment {
   pitchDeg: number
@@ -191,59 +183,46 @@ export async function POST(
   )
   const enhancementsUsedFallback = enhanceResults.filter((r) => r.usedFallback).length
 
-  // ─── 6. Pick 4 views for Meshy ──────────────────────────────────────────────
-  const meshyImages: Buffer[] = MESHY_VIEW_SELECTION.map((label) => {
-    const idx = ALL_LABELS.indexOf(label)
-    return enhanceResults[idx].png
-  })
-
-  // ─── 6b. Upload front image to Supabase for a stable public URL ───────────
-  // Meshy's direct API misbehaves with large data URIs (>1MB), failing
-  // with a generic "temporarily unavailable" after running for ~50s.
-  // Hosting the PNG on Supabase and passing the signed URL bypasses the
-  // data URI path entirely.
-  const meshyImageUploadPath = `meshy/tmp/${cacheKey}.front.png`
-  const { error: tmpUploadError } = await supabase.storage
-    .from(SUPABASE_BUCKET)
-    .upload(meshyImageUploadPath, meshyImages[0], {
-      contentType: 'image/png',
-      upsert: true,
-    })
-  if (tmpUploadError) {
-    console.error('[generate] tmp image upload failed', tmpUploadError)
-    return NextResponse.json({ error: 'Failed to stage Meshy input image' }, { status: 502 })
+  // ─── 6. Stage Gemini-enhanced PNGs on Supabase ──────────────────────────────
+  // Meshy needs stable HTTPS URLs (its API misbehaves with >1MB data URIs).
+  // We upload each enhanced PNG once, then (a) pass the signed URLs to
+  // Meshy's multi-image endpoint and (b) return them to the client so the
+  // UI can display the cleaned images alongside the raw captures.
+  const enhancedSignedUrls: string[] = []
+  for (let i = 0; i < ALL_LABELS.length; i++) {
+    const label = ALL_LABELS[i]
+    const enhancedPng = enhanceResults[i].png
+    const path = `meshy/tmp/${cacheKey}.${label}.png`
+    const { error: upErr } = await supabase.storage
+      .from(SUPABASE_BUCKET)
+      .upload(path, enhancedPng, { contentType: 'image/png', upsert: true })
+    if (upErr) {
+      console.error(`[generate] tmp ${label} upload failed`, upErr)
+      return NextResponse.json({ error: `Failed to stage Meshy input image (${label})` }, { status: 502 })
+    }
+    const { data: signed } = await supabase.storage
+      .from(SUPABASE_BUCKET)
+      .createSignedUrl(path, 60 * 60)
+    if (!signed?.signedUrl) {
+      console.error(`[generate] failed to sign ${label} tmp url`)
+      return NextResponse.json({ error: `Failed to sign Meshy input url (${label})` }, { status: 502 })
+    }
+    enhancedSignedUrls.push(signed.signedUrl)
   }
-  const { data: signedInput } = await supabase.storage
-    .from(SUPABASE_BUCKET)
-    .createSignedUrl(meshyImageUploadPath, 60 * 60)
-  if (!signedInput?.signedUrl) {
-    console.error('[generate] failed to sign tmp image url')
-    return NextResponse.json({ error: 'Failed to sign Meshy input image url' }, { status: 502 })
-  }
-  console.log('[generate] meshy input image signed url:', signedInput.signedUrl.slice(0, 100))
+  console.log('[generate] meshy input image urls:', enhancedSignedUrls.length, 'staged')
 
-  // ─── 7. Meshy ──────────────────────────────────────────────────────────────
+  // ─── 7. Meshy multi-image-to-3d ─────────────────────────────────────────────
   let meshyGlb: Buffer
   try {
-    // dimensionsM.y is the vertical extent of the cropped tile mesh and can
-    // pick up trees / antennas / surrounding geometry; clamp it to a sane UK
-    // residential range so the texture_prompt doesn't claim "ridge 33.5m".
-    const clampedRidgeM = Math.min(Math.max(dimensionsM.y, eaveHeightM + 0.5), eaveHeightM + 6)
-    const meshyDims = {
-      widthM: dimensionsM.x,
-      depthM: dimensionsM.z,
-      eaveHeightM,
-      ridgeHeightM: clampedRidgeM,
-    }
-    const meshyRoofSegments: MeshyRoofSegment[] = roofSegments.map((s) => ({
-      pitchDeg: s.pitchDeg,
-      azimuthDeg: s.azimuthDeg,
-      areaM2: s.areaM2,
-    }))
-    const texturePrompt = buildTexturePrompt(meshyRoofSegments, meshyDims)
+    const texturePrompt = buildTexturePrompt([], {
+      widthM: 0,
+      depthM: 0,
+      eaveHeightM: 0,
+      ridgeHeightM: 0,
+    })
     const meshyResult = await generateGlb({
-      imageUrl: signedInput.signedUrl,
-      images: meshyImages,
+      imageUrls: enhancedSignedUrls,
+      images: ALL_LABELS.map((_, i) => enhanceResults[i].png),
       texturePrompt,
       enablePbr: true,
     })
@@ -318,5 +297,13 @@ export async function POST(
     source: 'meshy',
     enhancementsUsedFallback,
     roofReplaced,
+    /** Signed URLs to the Gemini-enhanced PNGs we shipped to Meshy.
+     *  Order matches ALL_LABELS (currently ['front', 'back']). The UI
+     *  uses these to render an "enhanced" thumbnail next to each raw
+     *  capture in the Gemini-inputs strip. */
+    enhancedImageUrls: ALL_LABELS.map((label, i) => ({
+      label,
+      url: enhancedSignedUrls[i],
+    })),
   })
 }
