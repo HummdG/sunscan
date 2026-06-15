@@ -21,41 +21,57 @@ export default async function InstallerLanding({ params }: Props) {
   const installer = await resolveInstaller(installerSlug)
   if (!installer) notFound()
 
-  const primary = installer.branding?.primaryColor ?? '#1d4ed8'
+  const primary = installer.branding?.primaryColor ?? '#B04020'
   const tagline = installer.branding?.companyTagline ?? 'Solar & battery storage for your home'
 
   return (
-    <main className="mx-auto max-w-3xl px-6 py-16 sm:py-24 text-center">
-      <p className="text-sm font-semibold uppercase tracking-widest" style={{ color: primary }}>
-        {installer.name}
+    <main className="relative mx-auto max-w-3xl px-6 py-20 sm:py-28 text-center">
+      {/* soft solar glow */}
+      <div
+        aria-hidden
+        className="pointer-events-none absolute inset-0 -z-10"
+        style={{
+          background:
+            'radial-gradient(ellipse at 50% 0%, color-mix(in srgb, var(--brand-accent) 16%, transparent) 0%, transparent 60%)',
+        }}
+      />
+      <p
+        className="ss-mono text-[11px] uppercase"
+        style={{ letterSpacing: '0.28em', color: primary }}
+      >
+        {installer.name} · Solar estimate
       </p>
-      <h1 className="mt-4 text-4xl sm:text-5xl font-bold tracking-tight text-slate-900">
-        Find out what solar and battery system could work for your home.
+      <h1
+        className="ss-heading mt-5 text-4xl sm:text-[3.25rem] leading-[1.05] font-semibold tracking-tight"
+        style={{ color: 'var(--ss-t1)' }}
+      >
+        Find out what solar &amp; battery could do for your home.
       </h1>
-      <p className="mt-6 text-lg text-slate-600">
+      <p className="mt-6 text-lg leading-relaxed" style={{ color: 'var(--ss-t2)' }}>
         Enter your address and answer a few simple questions. We&apos;ll model your roof, estimate how
         many panels could fit, and show you three system options based on your budget, energy use and
         potential savings.
       </p>
 
-      <div className="mt-10 flex flex-col sm:flex-row gap-4 justify-center">
+      <div className="mt-10 flex flex-col sm:flex-row gap-3 justify-center">
         <Link
           href={`/${installerSlug}/start`}
-          className="inline-flex justify-center rounded-lg px-8 py-4 text-base font-semibold text-white shadow-sm transition hover:opacity-90"
+          className="inline-flex justify-center rounded-xl px-8 py-4 text-base font-semibold text-white shadow-sm transition hover:opacity-90"
           style={{ background: primary }}
         >
-          Start My Estimate
+          Start my estimate
         </Link>
         <Link
           href={`/${installerSlug}/start?intent=survey`}
-          className="inline-flex justify-center rounded-lg border border-slate-300 px-8 py-4 text-base font-semibold text-slate-700 transition hover:bg-slate-50"
+          className="inline-flex justify-center rounded-xl px-8 py-4 text-base font-semibold transition"
+          style={{ color: 'var(--ss-t2)', border: '1px solid var(--ss-border-h)' }}
         >
-          Book a Free Survey
+          Book a free survey
         </Link>
       </div>
 
-      <p className="mt-8 text-sm text-slate-400">
-        {tagline} · Indicative estimate, confirmed by survey.
+      <p className="ss-mono mt-8 text-[11px]" style={{ color: 'var(--ss-t4)' }}>
+        {tagline} · Indicative estimate, confirmed by survey
       </p>
     </main>
   )

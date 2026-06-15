@@ -13,38 +13,49 @@ export default async function InstallerLayout({ children, params }: Props) {
   const installer = await resolveInstaller(installerSlug)
   if (!installer) notFound()
 
-  const primary = installer.branding?.primaryColor ?? '#1d4ed8'
-  const accent = installer.branding?.accentColor ?? '#f59e0b'
+  const primary = installer.branding?.primaryColor ?? '#B04020'
+  const accent = installer.branding?.accentColor ?? '#D97706'
 
-  const brandVars = {
+  const shell = {
     '--brand-primary': primary,
     '--brand-accent': accent,
+    background: 'var(--ss-ink)',
+    color: 'var(--ss-t1)',
   } as CSSProperties
 
   return (
-    <div className="min-h-screen flex flex-col bg-white text-slate-900" style={brandVars}>
-      <header className="border-b border-slate-200">
+    <div className="min-h-screen flex flex-col" style={shell}>
+      <header className="border-b" style={{ borderColor: 'var(--ss-border)' }}>
         <div className="mx-auto max-w-5xl px-6 py-4 flex items-center justify-between">
-          <Link href={`/${installerSlug}`} className="flex items-center gap-2 no-underline">
+          <Link href={`/${installerSlug}`} className="flex items-center gap-2.5 no-underline">
             {installer.branding?.logoUrl ? (
               // eslint-disable-next-line @next/next/no-img-element
               <img src={installer.branding.logoUrl} alt={installer.name} className="h-8 w-auto" />
             ) : (
-              <span className="text-lg font-bold" style={{ color: primary }}>
+              <span
+                className="ss-heading text-lg font-semibold tracking-tight"
+                style={{ color: primary }}
+              >
                 {installer.name}
               </span>
             )}
           </Link>
-          <span className="text-[10px] uppercase tracking-[0.2em] text-slate-400">
+          <span
+            className="ss-mono text-[10px] uppercase"
+            style={{ letterSpacing: '0.22em', color: 'var(--ss-t4)' }}
+          >
             Powered by SunScan
           </span>
         </div>
       </header>
 
-      <div className="flex-1">{children}</div>
+      <div className="flex-1 flex flex-col">{children}</div>
 
-      <footer className="border-t border-slate-200 mt-auto">
-        <div className="mx-auto max-w-5xl px-6 py-6 text-xs text-slate-500 space-y-1">
+      <footer className="border-t mt-auto" style={{ borderColor: 'var(--ss-border)' }}>
+        <div
+          className="mx-auto max-w-5xl px-6 py-6 text-xs space-y-1"
+          style={{ color: 'var(--ss-t3)' }}
+        >
           <p>
             Estimates are indicative only and confirmed by survey.
             {installer.branding?.contactEmail ? ` · ${installer.branding.contactEmail}` : ''}
