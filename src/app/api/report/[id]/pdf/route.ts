@@ -18,10 +18,7 @@ export async function GET(
   data.pdfUrl = null
 
   try {
-    const pdfBuffer = await generateReportPdf(
-      data,
-      report.model3dImageUrl ?? undefined,
-    )
+    const pdfBuffer = await generateReportPdf(data)
 
     return new NextResponse(new Uint8Array(pdfBuffer), {
       headers: {

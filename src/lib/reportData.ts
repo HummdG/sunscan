@@ -74,7 +74,6 @@ export function hydrateReportData(report: ReportWithConfig): ReportData {
       twentyFiveYearSavings,
     },
     assumptions,
-    model3dImageUrl: report.model3dImageUrl,
     pdfUrl: report.pdfUrl,
     quote,
     dataConfidence,

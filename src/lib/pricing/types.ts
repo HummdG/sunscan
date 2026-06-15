@@ -58,6 +58,8 @@ export interface QuoteBreakdown {
 
 // ─── Catalogue snapshots (mirror Prisma rows, JSON-safe) ───────────────────
 
+export type ProductTier = 'budget' | 'standard' | 'premium'
+
 export interface CataloguePanel {
   sku: string
   modelName: string
@@ -68,7 +70,20 @@ export interface CataloguePanel {
   depthMm: number
   upliftType: 'base' | 'percent' | 'flat_per_panel'
   upliftValue: number
+  productTier: ProductTier
   isBase: boolean
+  sortOrder: number
+}
+
+export interface CatalogueInverter {
+  sku: string
+  modelName: string
+  manufacturer: string
+  ratedKw: number
+  efficiency: number
+  productTier: ProductTier
+  priceGbp: number
+  isDefault: boolean
   sortOrder: number
 }
 
@@ -141,6 +156,7 @@ export interface CatalogueTrenching {
 export interface PricingCatalogue {
   version: string
   panels: CataloguePanel[]
+  inverters: CatalogueInverter[]
   pvBasePrice: CataloguePvBasePrice[]
   mounting: CatalogueMounting[]
   batteries: CatalogueBattery[]

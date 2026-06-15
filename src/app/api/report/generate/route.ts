@@ -75,7 +75,6 @@ const BodySchema = z.object({
   billSource: z.enum(['ocr', 'manual']),
   assumptions: AssumptionsSchema,
   solarApiJson: z.string().optional(),
-  model3dImageBase64: z.string().optional(),
   selectedTier: z.enum(['essential', 'standard', 'premium']).optional(),
   selectedConfig: z.unknown().optional(),
   dataConfidence: DataConfidenceSchema,
@@ -120,6 +119,17 @@ export async function POST(request: NextRequest) {
     }
 
     const data = parsed.data
+
+    // Resolve the active installer (multi-tenant: Report now requires installerId).
+    const installer = await prisma.installer.findFirst({
+      where: { status: 'active' },
+      orderBy: { createdAt: 'asc' },
+      select: { id: true },
+    })
+    if (!installer) {
+      return NextResponse.json({ error: 'no-installer' }, { status: 500 })
+    }
+
     const assumptions: SolarAssumptions = data.assumptions
     const dataConfidence: DataConfidence = data.dataConfidence
     // Use the bill's export tariff as the source of truth for savings — these can drift
@@ -308,7 +318,7 @@ export async function POST(request: NextRequest) {
     }
 
     // ── 4. Build ReportData ───────────────────────────────────────────────
-    const reportData: Omit<ReportData, 'id' | 'quoteNumber' | 'createdAt' | 'pdfUrl' | 'model3dImageUrl'> = {
+    const reportData: Omit<ReportData, 'id' | 'quoteNumber' | 'createdAt' | 'pdfUrl'> = {
       addressRaw: data.addressRaw,
       lat: data.lat,
       lng: data.lng,
@@ -342,6 +352,7 @@ export async function POST(request: NextRequest) {
 
     const report = await prisma.report.create({
       data: {
+        installerId: installer.id,
         quoteNumber,
         addressRaw: data.addressRaw,
         addressUprn: data.addressUprn,
@@ -373,9 +384,6 @@ export async function POST(request: NextRequest) {
         twentyFiveYearJson: JSON.stringify(results.twentyFiveYearSavings),
         assumptionsJson: JSON.stringify(assumptions),
         panelLayoutJson: JSON.stringify(panelPositions),
-        model3dImageUrl: data.model3dImageBase64
-          ? `data:image/png;base64,${data.model3dImageBase64.replace(/^data:image\/\w+;base64,/, '')}`
-          : null,
         status: 'draft',
         solarApiJson: data.solarApiJson ?? null,
         solarCoveragePercent,
@@ -410,14 +418,13 @@ export async function POST(request: NextRequest) {
       id: report.id,
       quoteNumber,
       createdAt: report.createdAt.toISOString(),
-      model3dImageUrl: report.model3dImageUrl,
       pdfUrl: null,
       quote,
     }
 
     let pdfUrl: string | null = null
     try {
-      const pdfBuffer = await generateReportPdf(fullReportData, data.model3dImageBase64)
+      const pdfBuffer = await generateReportPdf(fullReportData)
 
       const supabase = getSupabaseAdmin()
       if (supabase) {

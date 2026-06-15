@@ -121,7 +121,7 @@ export async function PUT(
     })
     if (fresh) {
       const data = hydrateReportData(fresh)
-      const pdfBuffer = await generateReportPdf(data, report.model3dImageUrl ?? undefined)
+      const pdfBuffer = await generateReportPdf(data)
 
       const supabase = getSupabaseAdmin()
       if (supabase) {

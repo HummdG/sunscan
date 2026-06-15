@@ -4,12 +4,10 @@ import { ReportDocument } from '@/components/pdf/ReportDocument'
 
 export async function generateReportPdf(
   data: ReportData,
-  model3dImageBase64?: string,
 ): Promise<Buffer> {
   const element = (
     <ReportDocument
       data={data}
-      model3dImage={model3dImageBase64}
     />
   )
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

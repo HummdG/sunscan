@@ -6,11 +6,102 @@ datasource db {
   provider = "postgresql"
 }
 
+// ─── Tenancy ────────────────────────────────────────────────────────────────
+
+model Installer {
+  id               String   @id @default(cuid())
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  slug             String   @unique
+  name             String
+  status           String   @default("active") // active | suspended
+  catalogueVersion String   @default("v1") // bump to bust per-installer caches
+
+  config       InstallerConfig?
+  branding     InstallerBranding?
+  users        InstallerUser[]
+  panels       PricingPanel[]
+  pvBasePrices PricingPvBasePrice[]
+  mountings    PricingMounting[]
+  batteries    PricingBattery[]
+  inverters    PricingInverter[]
+  extras       PricingExtra[]
+  trenching    PricingTrenching[]
+  reports      Report[]
+  leads        Lead[]
+
+  @@index([slug])
+}
+
+model InstallerUser {
+  id          String    @id @default(cuid())
+  createdAt   DateTime  @default(now())
+  installerId String
+  installer   Installer @relation(fields: [installerId], references: [id], onDelete: Cascade)
+  email       String    @unique
+  role        String    @default("owner") // owner | staff
+  authUserId  String?   @unique // Supabase auth.uid()
+
+  @@index([installerId])
+}
+
+model InstallerConfig {
+  id          String    @id @default(cuid())
+  installerId String    @unique
+  installer   Installer @relation(fields: [installerId], references: [id], onDelete: Cascade)
+  updatedAt   DateTime  @updatedAt
+
+  // Performance assumptions (override DEFAULT_ASSUMPTIONS per installer)
+  shadingLoss             Float @default(0.05)
+  inverterLoss            Float @default(0.03)
+  systemLoss              Float @default(0.10)
+  energyInflationRate     Float @default(0.03)
+  panelDegradationPerYear Float @default(0.005)
+
+  // Sizing + commercials
+  minPanels     Int   @default(6)
+  maxPanels     Int   @default(50)
+  marginPercent Float @default(0)
+
+  // Sentinel optimisation layer
+  sentinelEnabled    Boolean @default(true)
+  sentinelConfigJson Json // SentinelConfig: base uplift %, tariff modifiers, etc.
+
+  // Journey + presentation config
+  budgetBandsJson   Json // [{ id, label, minGbp, maxGbp }]
+  surveyOptionsJson Json // { remote, onsite, installerChoice }
+  coverageAreasJson Json // postcode prefixes / regions served
+  financeOptionsJson Json
+  warrantyJson      Json
+
+  // Lead routing
+  notificationEmail String
+  crmWebhookUrl     String?
+  crmWebhookSecret  String? // HMAC signing key for the webhook payload
+}
+
+model InstallerBranding {
+  id             String    @id @default(cuid())
+  installerId    String    @unique
+  installer      Installer @relation(fields: [installerId], references: [id], onDelete: Cascade)
+  logoUrl        String?
+  primaryColor   String    @default("#1d4ed8")
+  accentColor    String    @default("#f59e0b")
+  companyTagline String?
+  contactPhone   String?
+  contactEmail   String?
+  privacyUrl     String?
+}
+
+// ─── Report (per-installer) ─────────────────────────────────────────────────
+
 model Report {
-  id                        String   @id @default(cuid())
-  createdAt                 DateTime @default(now())
-  updatedAt                 DateTime @updatedAt
-  quoteNumber               String   @unique
+  id                        String    @id @default(cuid())
+  createdAt                 DateTime  @default(now())
+  updatedAt                 DateTime  @updatedAt
+  installerId               String
+  installer                 Installer @relation(fields: [installerId], references: [id])
+  quoteNumber               String    @unique
   addressRaw                String
   addressUprn               String?
   lat                       Float
@@ -40,96 +131,18 @@ model Report {
   monthlyGenJson            String
   twentyFiveYearJson        String
   assumptionsJson           String
-  panelLayoutJson           String   @default("[]")
-  model3dImageUrl           String?
-  reconstructedModelUrl     String?
+  panelLayoutJson           String    @default("[]")
   pdfUrl                    String?
-  status                    String   @default("draft")
+  status                    String    @default("draft")
   solarApiJson              String?
   solarCoveragePercent      Float?
   imageryQuality            String?
   mcsGenerationKwh          Float?
   dataConfidence            Json?
   configuration             SystemConfiguration?
-}
+  lead                      Lead?
 
-// ─── Pricing catalogue ──────────────────────────────────────────────────────
-
-model PricingPanel {
-  id           String  @id @default(cuid())
-  sku          String  @unique
-  modelName    String
-  manufacturer String
-  wattPeak     Int
-  widthMm      Int     @default(1134)
-  heightMm     Int     @default(1762)
-  depthMm      Int     @default(30)
-  upliftType   String  @default("base") // "base" | "percent" | "flat_per_panel"
-  upliftValue  Float   @default(0)      // 0.075 = +7.5%  OR  £/panel
-  isBase       Boolean @default(false)
-  isActive     Boolean @default(true)
-  sortOrder    Int     @default(0)
-}
-
-model PricingPvBasePrice {
-  panelCount Int   @id // 1..50
-  kwp        Float
-  priceGbp   Int
-}
-
-model PricingMounting {
-  id            String  @id @default(cuid())
-  sku           String  @unique // "MOUNT-PITCHED-TILE", "MOUNT-GROUND-15", "MOUNT-FLAT-VDV"
-  label         String
-  pricePerPanel Int     // 30, 50, 65
-  appliesTo     String  // "pitched" | "flat" | "ground"
-  isDefault     Boolean @default(false)
-  sortOrder     Int     @default(0)
-  isActive      Boolean @default(true)
-}
-
-model PricingBattery {
-  id                   String  @id @default(cuid())
-  sku                  String  @unique
-  modelName            String
-  tier                 String  // "standard" | "premium"
-  baseCapacityKwh      Float
-  priceWithSolar       Int
-  priceRetrofit        Int
-  expansionSku         String?
-  expansionCapacityKwh Float?
-  expansionPriceGbp    Int?
-  expansionMaxUnits    Int?
-  multiUnitDiscountGbp Int     @default(0) // Fox EVO: -£200 per additional EVO
-  sortOrder            Int     @default(0)
-  isActive             Boolean @default(true)
-}
-
-model PricingExtra {
-  id             String  @id @default(cuid())
-  sku            String  @unique
-  category       String  // "scaffold"|"general_electrical"|"ev"|"optimiser"|"bird_mesh"|"eps"|"microinverter"|"structural"
-  label          String
-  priceCalc      String  // "flat"|"per_panel"|"per_panel_with_threshold"|"fixed_plus_per_panel"
-  baseGbp        Int     @default(0)
-  perPanelGbp    Int     @default(0)
-  panelThreshold Int? // bird mesh: 20
-  isMandatory    Boolean @default(false) // admin fee
-  exclusiveGroup String? // "tigo", "eps"
-  sortOrder      Int     @default(0)
-  isActive       Boolean @default(true)
-}
-
-model PricingTrenching {
-  id          String  @id @default(cuid())
-  sku         String  @unique
-  surface     String  // "soft" | "hard"
-  metresFrom  Int
-  metresTo    Int? // null = bespoke
-  perMetreGbp Int
-  fixedFeeGbp Int
-  isBespoke   Boolean @default(false)
-  sortOrder   Int     @default(0)
+  @@index([installerId, createdAt])
 }
 
 model SystemConfiguration {
@@ -138,10 +151,225 @@ model SystemConfiguration {
   report           Report   @relation(fields: [reportId], references: [id], onDelete: Cascade)
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
-  tier             String   // "essential"|"standard"|"premium"|"custom"
-  configJson       String   // SystemConfig — the user's selection
-  lineItemsJson    String   // QuoteBreakdown snapshot — fast read
+  tier             String // "essential"|"standard"|"premium"|"custom"
+  configJson       String // SystemConfig — the user's selection
+  lineItemsJson    String // QuoteBreakdown snapshot — fast read
   totalPounds      Int
   vatRatePercent   Int      @default(0)
   catalogueVersion String   @default("2026-01")
+}
+
+// ─── Leads ──────────────────────────────────────────────────────────────────
+
+model Lead {
+  id          String    @id @default(cuid())
+  createdAt   DateTime  @default(now())
+  installerId String
+  installer   Installer @relation(fields: [installerId], references: [id])
+  reportId    String?   @unique
+  report      Report?   @relation(fields: [reportId], references: [id])
+
+  leadSource String // slug / embed / utm
+
+  // Contact
+  firstName  String
+  lastName   String
+  email      String
+  phone      String?
+  addressRaw String
+  postcode   String
+  uprn       String?
+
+  // Property + roof
+  propertyType           String // detached|semi|terraced|bungalow|flat
+  ownership              String // own|mortgage|rent|social|landlord
+  permissionFlag         Boolean @default(false)
+  roofConfidence         String // high|medium|low
+  maxPanelCount          Int
+  systemSizePotentialKwp Float
+
+  // Usage + tariff
+  usageSource    String // bill_ocr|manual_kwh|monthly_cost|household
+  annualKwh      Float
+  monthlyCostGbp Float?
+  tariffType     String
+  existingSolar  String // new|upgrade|retrofit|optimisation
+  evStatus       String // none|now|planned
+  heatPumpStatus String
+  lifestyleTags  String[]
+
+  // Commercials
+  motivation      String?
+  budgetBandId    String
+  financeInterest Boolean @default(false)
+
+  // Generated options snapshot
+  optionsJson         Json // OptionResult[] (3)
+  recommendedOptionId String
+  sentinelShown       Boolean @default(false)
+  paybacksJson        Json
+
+  // Outcomes
+  reportRequested  Boolean @default(false)
+  surveyRequested  Boolean @default(false)
+  surveyType       String? // remote|onsite|installer_choice
+  preferredContact String?
+  bestTime         String?
+  comments         String?
+  consent          Boolean @default(false)
+
+  // Scoring + delivery
+  leadScore        String // hot|warm|nurture
+  leadScoreReasons String[]
+  emailSentAt      DateTime?
+
+  webhookDeliveries WebhookDelivery[]
+
+  @@index([installerId, createdAt])
+  @@index([installerId, leadScore])
+}
+
+model WebhookDelivery {
+  id           String   @id @default(cuid())
+  leadId       String
+  lead         Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  url          String
+  attempt      Int      @default(1)
+  status       String // pending|success|failed
+  httpStatus   Int?
+  responseBody String?
+  signature    String
+  createdAt    DateTime @default(now())
+
+  @@index([leadId])
+}
+
+// ─── Pricing catalogue (per-installer) ──────────────────────────────────────
+
+model PricingPanel {
+  id           String    @id @default(cuid())
+  installerId  String
+  installer    Installer @relation(fields: [installerId], references: [id], onDelete: Cascade)
+  sku          String
+  modelName    String
+  manufacturer String
+  wattPeak     Int
+  widthMm      Int       @default(1134)
+  heightMm     Int       @default(1762)
+  depthMm      Int       @default(30)
+  upliftType   String    @default("base") // "base" | "percent" | "flat_per_panel"
+  upliftValue  Float     @default(0) // 0.075 = +7.5%  OR  £/panel
+  productTier  String    @default("standard") // budget | standard | premium
+  isBase       Boolean   @default(false)
+  isActive     Boolean   @default(true)
+  sortOrder    Int       @default(0)
+
+  @@unique([installerId, sku])
+  @@index([installerId])
+}
+
+model PricingPvBasePrice {
+  id          String    @id @default(cuid())
+  installerId String
+  installer   Installer @relation(fields: [installerId], references: [id], onDelete: Cascade)
+  panelCount  Int // 1..50
+  kwp         Float
+  priceGbp    Int
+
+  @@unique([installerId, panelCount])
+  @@index([installerId])
+}
+
+model PricingMounting {
+  id            String    @id @default(cuid())
+  installerId   String
+  installer     Installer @relation(fields: [installerId], references: [id], onDelete: Cascade)
+  sku           String // "MOUNT-PITCHED-TILE", "MOUNT-GROUND-15", "MOUNT-FLAT-VDV"
+  label         String
+  pricePerPanel Int
+  appliesTo     String // "pitched" | "flat" | "ground"
+  isDefault     Boolean   @default(false)
+  sortOrder     Int       @default(0)
+  isActive      Boolean   @default(true)
+
+  @@unique([installerId, sku])
+  @@index([installerId])
+}
+
+model PricingBattery {
+  id                   String    @id @default(cuid())
+  installerId          String
+  installer            Installer @relation(fields: [installerId], references: [id], onDelete: Cascade)
+  sku                  String
+  modelName            String
+  tier                 String // "standard" | "premium" (product tier)
+  baseCapacityKwh      Float
+  priceWithSolar       Int
+  priceRetrofit        Int
+  expansionSku         String?
+  expansionCapacityKwh Float?
+  expansionPriceGbp    Int?
+  expansionMaxUnits    Int?
+  multiUnitDiscountGbp Int       @default(0)
+  sortOrder            Int       @default(0)
+  isActive             Boolean   @default(true)
+
+  @@unique([installerId, sku])
+  @@index([installerId])
+}
+
+model PricingInverter {
+  id           String    @id @default(cuid())
+  installerId  String
+  installer    Installer @relation(fields: [installerId], references: [id], onDelete: Cascade)
+  sku          String
+  modelName    String
+  manufacturer String
+  ratedKw      Float
+  efficiency   Float     @default(0.97)
+  productTier  String    @default("standard") // budget | standard | premium
+  priceGbp     Int       @default(0) // 0 = bundled into PV base price
+  isDefault    Boolean   @default(false)
+  isActive     Boolean   @default(true)
+  sortOrder    Int       @default(0)
+
+  @@unique([installerId, sku])
+  @@index([installerId])
+}
+
+model PricingExtra {
+  id             String    @id @default(cuid())
+  installerId    String
+  installer      Installer @relation(fields: [installerId], references: [id], onDelete: Cascade)
+  sku            String
+  category       String // "scaffold"|"general_electrical"|"ev"|"optimiser"|"bird_mesh"|"eps"|"microinverter"|"structural"
+  label          String
+  priceCalc      String // "flat"|"per_panel"|"per_panel_with_threshold"|"fixed_plus_per_panel"
+  baseGbp        Int       @default(0)
+  perPanelGbp    Int       @default(0)
+  panelThreshold Int? // bird mesh: 20
+  isMandatory    Boolean   @default(false) // admin fee
+  exclusiveGroup String? // "tigo", "eps"
+  sortOrder      Int       @default(0)
+  isActive       Boolean   @default(true)
+
+  @@unique([installerId, sku])
+  @@index([installerId])
+}
+
+model PricingTrenching {
+  id          String    @id @default(cuid())
+  installerId String
+  installer   Installer @relation(fields: [installerId], references: [id], onDelete: Cascade)
+  sku         String
+  surface     String // "soft" | "hard"
+  metresFrom  Int
+  metresTo    Int? // null = bespoke
+  perMetreGbp Int
+  fixedFeeGbp Int
+  isBespoke   Boolean   @default(false)
+  sortOrder   Int       @default(0)
+
+  @@unique([installerId, sku])
+  @@index([installerId])
 }

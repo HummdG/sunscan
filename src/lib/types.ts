@@ -202,7 +202,6 @@ export interface ReportData {
   mcsGenerationKwh?: number | null
 
   // Images
-  model3dImageUrl: string | null
   pdfUrl: string | null
 
   // Pricing (optional — present once a SystemConfiguration exists)
@@ -318,7 +317,6 @@ export interface GenerateReportPayload {
   billSource: 'ocr' | 'manual'
   assumptions: SolarAssumptions
   solarApiJson?: string
-  model3dImageBase64?: string
   chartImagesBase64?: string[]
   dataConfidence: DataConfidence
 }

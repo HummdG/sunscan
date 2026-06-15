@@ -1,8 +1,10 @@
-// Seed the pricing catalogue from the 2026 master pricelist.
+// Seed the HSEnergy installer (tenant) + its pricing catalogue from the 2026 master pricelist.
 // Source: "Residential Sales Pricelists - Google Sheets.pdf" (HSEnergy Group Ltd, v 23rd Feb 2026).
 // Owner: hummd2001@gmail.com
 //
-// Idempotent — keyed by sku / panelCount, so re-running upserts unchanged rows.
+// Multi-tenant: every catalogue row is scoped by installerId. HSEnergy is the first
+// seeded installer (slug "hsenergy"). Idempotent — keyed by [installerId, sku] /
+// [installerId, panelCount] / slug, so re-running upserts unchanged rows.
 
 import { PrismaClient } from '@prisma/client'
 import { PrismaPg } from '@prisma/adapter-pg'
@@ -17,6 +19,55 @@ const pool = new Pool({
   max: 1,
 })
 const prisma = new PrismaClient({ adapter: new PrismaPg(pool) })
+
+const INSTALLER_SLUG = 'hsenergy'
+
+// ─── Installer config (assumptions, Sentinel, budget bands, survey, branding) ──
+const SENTINEL_CONFIG = {
+  enabled: true,
+  baseUpliftPercent: 0.12,
+  // Extra uplift by tariff type — smart/ToU tariffs benefit most from optimisation.
+  tariffModifiers: {
+    standard: 0,
+    economy7: 0.03,
+    smart_tou: 0.08,
+    import_export: 0.06,
+    already_exports: 0.04,
+    unknown: 0,
+  },
+  // Sentinel mostly shifts self-consumption; without a battery the uplift is muted.
+  batteryRequiredForFullUplift: true,
+  noBatteryUpliftFactor: 0.4,
+  lifestyleBonus: {
+    ev_now: 0.03,
+    ev_planned: 0.015,
+    heatpump_now: 0.03,
+    heatpump_planned: 0.015,
+    high_daytime: 0.02,
+  },
+  capUpliftPercent: 0.3,
+  addedCostGbp: 0,
+}
+
+const BUDGET_BANDS = [
+  { id: 'under_6k', label: 'Under £6,000', minGbp: 0, maxGbp: 6000 },
+  { id: '6k_8k', label: '£6,000 to £8,000', minGbp: 6000, maxGbp: 8000 },
+  { id: '8k_10k', label: '£8,000 to £10,000', minGbp: 8000, maxGbp: 10000 },
+  { id: '10k_12k', label: '£10,000 to £12,000', minGbp: 10000, maxGbp: 12000 },
+  { id: '12k_15k', label: '£12,000 to £15,000', minGbp: 12000, maxGbp: 15000 },
+  { id: '15k_plus', label: '£15,000+', minGbp: 15000, maxGbp: 30000 },
+  { id: 'unsure', label: "I'm not sure yet", minGbp: 0, maxGbp: 30000 },
+]
+
+const SURVEY_OPTIONS = { remote: true, onsite: true, installerChoice: true }
+const COVERAGE_AREAS: string[] = [] // empty = no postcode restriction for now
+const FINANCE_OPTIONS = { available: true, providers: [] as string[] }
+const WARRANTY = {
+  panels: '25 years product / 30 years performance',
+  inverter: '10 years',
+  battery: '10 years',
+  workmanship: '10 years (HSEnergy / MCS)',
+}
 
 // ─── PV base price table (1–50 panels, DMEGC 430W base) ────────────────────
 const PV_BASE: Array<{ panelCount: number; kwp: number; priceGbp: number }> = [
@@ -72,7 +123,7 @@ const PV_BASE: Array<{ panelCount: number; kwp: number; priceGbp: number }> = [
   { panelCount: 50, kwp: 21.5, priceGbp: 19673 },
 ]
 
-// ─── Panel models with uplifts ──────────────────────────────────────────────
+// ─── Panel models with uplifts + product tier ──────────────────────────────
 const PANELS = [
   {
     sku: 'DMEGC-DM430',
@@ -81,6 +132,7 @@ const PANELS = [
     wattPeak: 430,
     upliftType: 'base',
     upliftValue: 0,
+    productTier: 'budget',
     isBase: true,
     sortOrder: 1,
   },
@@ -91,6 +143,7 @@ const PANELS = [
     wattPeak: 455,
     upliftType: 'percent',
     upliftValue: 0.075,
+    productTier: 'standard',
     isBase: false,
     sortOrder: 2,
   },
@@ -101,6 +154,7 @@ const PANELS = [
     wattPeak: 460,
     upliftType: 'percent',
     upliftValue: 0.08,
+    productTier: 'premium',
     isBase: false,
     sortOrder: 3,
   },
@@ -111,97 +165,62 @@ const PANELS = [
     wattPeak: 450,
     upliftType: 'flat_per_panel',
     upliftValue: 150,
+    productTier: 'premium',
     isBase: false,
     sortOrder: 4,
   },
 ]
 
-// ─── Mounting ───────────────────────────────────────────────────────────────
-const MOUNTING = [
+// ─── Inverters (per-installer; replaces the old hardcoded DEFAULT_INVERTER) ──
+const INVERTERS = [
   {
-    sku: 'MOUNT-PITCHED-TILE',
-    label: 'Pitched tile mounting (slate / rosemary / clay)',
-    pricePerPanel: 30,
-    appliesTo: 'pitched',
-    isDefault: true,
+    sku: 'FOX-H1-3.7',
+    modelName: 'Fox ESS H1 3.7kW Hybrid',
+    manufacturer: 'Fox ESS',
+    ratedKw: 3.7,
+    efficiency: 0.97,
+    productTier: 'budget',
+    priceGbp: 0,
+    isDefault: false,
     sortOrder: 1,
   },
   {
-    sku: 'MOUNT-GROUND-15',
-    label: 'Ground mount 15° (Renusol ConSole+ tubs)',
-    pricePerPanel: 50,
-    appliesTo: 'ground',
+    sku: 'SE-SE5000H',
+    modelName: 'SolarEdge SE5000H',
+    manufacturer: 'SolarEdge',
+    ratedKw: 5,
+    efficiency: 0.97,
+    productTier: 'standard',
+    priceGbp: 0,
     isDefault: true,
     sortOrder: 2,
   },
   {
-    sku: 'MOUNT-FLAT-VDV',
-    label: 'Flat roof / ground mount 10° (Van der Valk)',
-    pricePerPanel: 65,
-    appliesTo: 'flat',
-    isDefault: true,
+    sku: 'FOX-H3-8.0',
+    modelName: 'Fox ESS H3 8.0kW Hybrid (3-phase ready)',
+    manufacturer: 'Fox ESS',
+    ratedKw: 8,
+    efficiency: 0.975,
+    productTier: 'premium',
+    priceGbp: 0,
+    isDefault: false,
     sortOrder: 3,
   },
 ]
 
+// ─── Mounting ───────────────────────────────────────────────────────────────
+const MOUNTING = [
+  { sku: 'MOUNT-PITCHED-TILE', label: 'Pitched tile mounting (slate / rosemary / clay)', pricePerPanel: 30, appliesTo: 'pitched', isDefault: true, sortOrder: 1 },
+  { sku: 'MOUNT-GROUND-15', label: 'Ground mount 15° (Renusol ConSole+ tubs)', pricePerPanel: 50, appliesTo: 'ground', isDefault: true, sortOrder: 2 },
+  { sku: 'MOUNT-FLAT-VDV', label: 'Flat roof / ground mount 10° (Van der Valk)', pricePerPanel: 65, appliesTo: 'flat', isDefault: true, sortOrder: 3 },
+]
+
 // ─── Batteries ──────────────────────────────────────────────────────────────
 const BATTERIES = [
-  {
-    sku: 'FOX-EC2900',
-    modelName: 'Fox ESS EC2900 (×2)',
-    tier: 'standard',
-    baseCapacityKwh: 5.8,
-    priceWithSolar: 2595,
-    priceRetrofit: 3195,
-    expansionSku: 'FOX-ECS2900',
-    expansionCapacityKwh: 2.9,
-    expansionPriceGbp: 895,
-    expansionMaxUnits: 7,
-    multiUnitDiscountGbp: 0,
-    sortOrder: 1,
-  },
-  {
-    sku: 'FOX-EQ4800',
-    modelName: 'Fox ESS EQ4800 (×2)',
-    tier: 'standard',
-    baseCapacityKwh: 9.6,
-    priceWithSolar: 3995,
-    priceRetrofit: 4695,
-    expansionSku: 'FOX-EQS4800',
-    expansionCapacityKwh: 4.8,
-    expansionPriceGbp: 1395,
-    expansionMaxUnits: 7,
-    multiUnitDiscountGbp: 0,
-    sortOrder: 2,
-  },
-  {
-    sku: 'FOX-EVO-1024',
-    modelName: 'Fox ESS EVO All-in-One',
-    tier: 'premium',
-    baseCapacityKwh: 10.24,
-    priceWithSolar: 4295,
-    priceRetrofit: 4995,
-    expansionSku: null,
-    expansionCapacityKwh: null,
-    expansionPriceGbp: null,
-    expansionMaxUnits: null,
-    multiUnitDiscountGbp: 200,
-    sortOrder: 3,
-  },
-  {
-    sku: 'TESLA-PW3',
-    modelName: 'Tesla Powerwall 3 + Gateway',
-    tier: 'premium',
-    baseCapacityKwh: 13.5,
-    priceWithSolar: 9195,
-    priceRetrofit: 9795,
-    expansionSku: null,
-    expansionCapacityKwh: null,
-    expansionPriceGbp: null,
-    expansionMaxUnits: null,
-    multiUnitDiscountGbp: 0,
-    sortOrder: 4,
-  },
+  { sku: 'FOX-EC2900', modelName: 'Fox ESS EC2900 (×2)', tier: 'standard', baseCapacityKwh: 5.8, priceWithSolar: 2595, priceRetrofit: 3195, expansionSku: 'FOX-ECS2900', expansionCapacityKwh: 2.9, expansionPriceGbp: 895, expansionMaxUnits: 7, multiUnitDiscountGbp: 0, sortOrder: 1 },
+  { sku: 'FOX-EQ4800', modelName: 'Fox ESS EQ4800 (×2)', tier: 'standard', baseCapacityKwh: 9.6, priceWithSolar: 3995, priceRetrofit: 4695, expansionSku: 'FOX-EQS4800', expansionCapacityKwh: 4.8, expansionPriceGbp: 1395, expansionMaxUnits: 7, multiUnitDiscountGbp: 0, sortOrder: 2 },
+  { sku: 'FOX-EVO-1024', modelName: 'Fox ESS EVO All-in-One', tier: 'premium', baseCapacityKwh: 10.24, priceWithSolar: 4295, priceRetrofit: 4995, expansionSku: null, expansionCapacityKwh: null, expansionPriceGbp: null, expansionMaxUnits: null, multiUnitDiscountGbp: 200, sortOrder: 3 },
+  { sku: 'TESLA-PW3', modelName: 'Tesla Powerwall 3 + Gateway', tier: 'premium', baseCapacityKwh: 13.5, priceWithSolar: 9195, priceRetrofit: 9795, expansionSku: null, expansionCapacityKwh: null, expansionPriceGbp: null, expansionMaxUnits: null, multiUnitDiscountGbp: 0, sortOrder: 4 },
 ]
 
 // ─── Extras (scaffolding, electrical, EV, optimiser, etc.) ─────────────────
@@ -255,39 +274,110 @@ const TRENCHING = [
 ]
 
 async function main() {
-  console.log('▶ Seeding pricing catalogue (2026 master pricelist)…')
+  console.log('▶ Seeding HSEnergy installer + pricing catalogue (2026 master pricelist)…')
 
+  // ── Installer (tenant) ──
+  const installer = await prisma.installer.upsert({
+    where: { slug: INSTALLER_SLUG },
+    update: { name: 'HSEnergy Residential', status: 'active' },
+    create: { slug: INSTALLER_SLUG, name: 'HSEnergy Residential', status: 'active', catalogueVersion: 'v1' },
+  })
+  const installerId = installer.id
+  console.log(`  ✓ installer ${INSTALLER_SLUG} (${installerId})`)
+
+  // ── Installer config ──
+  const configData = {
+    sentinelEnabled: true,
+    sentinelConfigJson: SENTINEL_CONFIG,
+    budgetBandsJson: BUDGET_BANDS,
+    surveyOptionsJson: SURVEY_OPTIONS,
+    coverageAreasJson: COVERAGE_AREAS,
+    financeOptionsJson: FINANCE_OPTIONS,
+    warrantyJson: WARRANTY,
+    notificationEmail: 'leads@hsenergygroup.co.uk',
+  }
+  await prisma.installerConfig.upsert({
+    where: { installerId },
+    update: configData,
+    create: { installerId, ...configData },
+  })
+  console.log('  ✓ installer config')
+
+  // ── Installer branding ──
+  await prisma.installerBranding.upsert({
+    where: { installerId },
+    update: {},
+    create: {
+      installerId,
+      primaryColor: '#1d4ed8',
+      accentColor: '#f59e0b',
+      companyTagline: 'Solar & battery storage, designed for your home',
+      contactEmail: 'info@hsenergygroup.co.uk',
+    },
+  })
+  console.log('  ✓ installer branding')
+
+  // ── Pricing catalogue (all scoped by installerId) ──
   for (const row of PV_BASE) {
     await prisma.pricingPvBasePrice.upsert({
-      where: { panelCount: row.panelCount },
+      where: { installerId_panelCount: { installerId, panelCount: row.panelCount } },
       update: row,
-      create: row,
+      create: { installerId, ...row },
     })
   }
   console.log(`  ✓ ${PV_BASE.length} PV base price rows`)
 
   for (const p of PANELS) {
-    await prisma.pricingPanel.upsert({ where: { sku: p.sku }, update: p, create: p })
+    await prisma.pricingPanel.upsert({
+      where: { installerId_sku: { installerId, sku: p.sku } },
+      update: p,
+      create: { installerId, ...p },
+    })
   }
   console.log(`  ✓ ${PANELS.length} panel models`)
 
+  for (const inv of INVERTERS) {
+    await prisma.pricingInverter.upsert({
+      where: { installerId_sku: { installerId, sku: inv.sku } },
+      update: inv,
+      create: { installerId, ...inv },
+    })
+  }
+  console.log(`  ✓ ${INVERTERS.length} inverters`)
+
   for (const m of MOUNTING) {
-    await prisma.pricingMounting.upsert({ where: { sku: m.sku }, update: m, create: m })
+    await prisma.pricingMounting.upsert({
+      where: { installerId_sku: { installerId, sku: m.sku } },
+      update: m,
+      create: { installerId, ...m },
+    })
   }
   console.log(`  ✓ ${MOUNTING.length} mounting options`)
 
   for (const b of BATTERIES) {
-    await prisma.pricingBattery.upsert({ where: { sku: b.sku }, update: b, create: b })
+    await prisma.pricingBattery.upsert({
+      where: { installerId_sku: { installerId, sku: b.sku } },
+      update: b,
+      create: { installerId, ...b },
+    })
   }
   console.log(`  ✓ ${BATTERIES.length} battery models`)
 
   for (const e of EXTRAS) {
-    await prisma.pricingExtra.upsert({ where: { sku: e.sku }, update: e, create: e })
+    await prisma.pricingExtra.upsert({
+      where: { installerId_sku: { installerId, sku: e.sku } },
+      update: e,
+      create: { installerId, ...e },
+    })
   }
   console.log(`  ✓ ${EXTRAS.length} extra items`)
 
   for (const t of TRENCHING) {
-    await prisma.pricingTrenching.upsert({ where: { sku: t.sku }, update: t, create: t })
+    await prisma.pricingTrenching.upsert({
+      where: { installerId_sku: { installerId, sku: t.sku } },
+      update: t,
+      create: { installerId, ...t },
+    })
   }
   console.log(`  ✓ ${TRENCHING.length} trenching tiers`)
 

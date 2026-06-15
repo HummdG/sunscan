@@ -4,7 +4,6 @@ import {
   Page,
   Text,
   View,
-  Image,
   StyleSheet,
   Font,
   Svg,
@@ -377,14 +376,12 @@ function ProvenanceFootnote({ data }: { data: ReportData }) {
 
 interface ReportDocumentProps {
   data: ReportData
-  model3dImage?: string
 }
 
-export function ReportDocument({ data, model3dImage }: ReportDocumentProps) {
+export function ReportDocument({ data }: ReportDocumentProps) {
   // Legacy reports may carry billSource: 'default' — hydrateReportData normalises
   // to 'manual', so the only remaining "estimated" surface is the footprint source.
   const isEstimatedBill = false
-  const isEstimatedFootprint = data.footprintSource === 'estimated'
   const annualBillBefore = (data.annualKwh * data.tariffPencePerKwh) / 100 + (data.standingChargePencePerDay * 365) / 100
   const annualBillAfter = annualBillBefore - data.results.annualSavingsPounds
 
@@ -477,18 +474,6 @@ export function ReportDocument({ data, model3dImage }: ReportDocumentProps) {
             <StatCard value={`${data.results.co2SavedTonnesPerYear} t`} label="CO₂ Saved/Year" color={GREEN} />
           </View>
           <ProvenanceFootnote data={data} />
-
-          {model3dImage && (
-            <View style={{ marginTop: 16 }}>
-              <Text style={styles.subHeader}>3D Visualisation</Text>
-              <Image src={model3dImage} style={{ width: '100%', maxHeight: 220, objectFit: 'contain', borderRadius: 6 }} />
-              {isEstimatedFootprint && (
-                <Text style={{ fontSize: 7, color: MUTED, marginTop: 6, fontStyle: 'italic' }}>
-                  Building outline reconstructed from address coordinates. Exact panel placement confirmed at site survey.
-                </Text>
-              )}
-            </View>
-          )}
         </View>
         <Text style={styles.pageNumber} render={({ pageNumber, totalPages }) => `${pageNumber} / ${totalPages}`} fixed />
       </Page>
