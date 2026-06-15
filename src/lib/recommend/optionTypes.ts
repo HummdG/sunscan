@@ -1,5 +1,6 @@
 import type { GoogleSolarBuildingInsights, SolarResults } from '@/lib/types'
 import type { PricingCatalogue, RoofType, SystemConfig, Tier } from '@/lib/pricing/types'
+import type { SentinelConfig, SentinelResult } from './sentinel'
 
 export type PresetTier = Exclude<Tier, 'custom'>
 export type OptionKind = 'budget_fit' | 'better_value' | 'recommended'
@@ -20,6 +21,7 @@ export interface OptionResult {
   systemKwp: number
   priceGbp: number
   results: SolarResults
+  sentinel: SentinelResult
   inclusions: string[]
   bestSuitedTo: string
   nextStep: string
@@ -62,6 +64,10 @@ export interface OptionSetInput {
   annualKwh: number
   importTariffPence: number
   exportTariffPence: number
+  /** Homeowner tariff type + lifestyle tags — drive the Sentinel uplift. */
+  tariffType: string
+  lifestyle: string[]
+  sentinelConfig: SentinelConfig | null
   mcsZone: string
   irradianceKwhPerM2: number
   shadingLoss: number

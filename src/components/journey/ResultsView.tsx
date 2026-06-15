@@ -103,23 +103,59 @@ function RecommendedBadge({ brandPrimary }: { brandPrimary: string }) {
   )
 }
 
-function SentinelPill() {
+function SentinelBlock({ option, brandPrimary }: { option: OptionResult; brandPrimary: string }) {
+  const s = option.sentinel
+  if (!s.enabled || s.upliftPercent <= 0) {
+    return (
+      <div
+        className="rounded-lg px-3 py-2"
+        style={{
+          background: 'color-mix(in srgb, var(--ss-t4) 8%, transparent)',
+          border: '1px dashed var(--ss-border-h)',
+        }}
+      >
+        <span className="text-xs" style={{ color: 'var(--ss-t3)' }}>
+          Sentinel optimisation available
+        </span>
+      </div>
+    )
+  }
+  const pct = Math.round(s.upliftPercent * 100)
+  const gbp = (n: number) => `£${Math.round(n).toLocaleString()}`
   return (
     <div
-      className="flex items-center gap-2 rounded-lg px-3 py-2"
+      className="rounded-xl p-3"
       style={{
-        background: 'color-mix(in srgb, var(--ss-t4) 8%, transparent)',
-        border: '1px dashed var(--ss-border-h)',
+        background: `color-mix(in srgb, ${brandPrimary} 6%, var(--ss-s1))`,
+        border: `1px solid color-mix(in srgb, ${brandPrimary} 28%, var(--ss-border))`,
       }}
     >
-      <span
-        aria-hidden
-        className="h-1.5 w-1.5 shrink-0 rounded-full"
-        style={{ background: 'var(--ss-t4)' }}
-      />
-      <span className="text-xs" style={{ color: 'var(--ss-t3)' }}>
-        Sentinel optimisation — shown next
-      </span>
+      <div className="flex items-center justify-between">
+        <span
+          className="ss-mono text-[10px] uppercase"
+          style={{ letterSpacing: '0.18em', color: brandPrimary }}
+        >
+          + Sentinel
+        </span>
+        <span className="text-xs font-semibold" style={{ color: brandPrimary }}>
+          +{pct}% uplift
+        </span>
+      </div>
+      <div className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
+        <span style={{ color: 'var(--ss-t3)' }}>Saving / yr</span>
+        <span className="text-right" style={{ color: 'var(--ss-t1)' }}>
+          {gbp(s.withoutSentinel.annualSavingGbp)} &rarr;{' '}
+          <b>{gbp(s.withSentinel.annualSavingGbp)}</b>
+        </span>
+        <span style={{ color: 'var(--ss-t3)' }}>Payback</span>
+        <span className="text-right" style={{ color: 'var(--ss-t1)' }}>
+          {s.withoutSentinel.paybackYears.toFixed(1)} &rarr;{' '}
+          <b>{s.withSentinel.paybackYears.toFixed(1)} yrs</b>
+        </span>
+      </div>
+      <p className="mt-1.5 text-[10px]" style={{ color: 'var(--ss-t4)' }}>
+        Indicative &middot; monitoring &amp; protection included
+      </p>
     </div>
   )
 }
@@ -186,8 +222,8 @@ function OptionCardView({
         ))}
       </dl>
 
-      {/* Sentinel placeholder */}
-      <SentinelPill />
+      {/* Sentinel before/after */}
+      <SentinelBlock option={option} brandPrimary={brandPrimary} />
 
       {/* Best suited + next step */}
       <div className="mt-auto space-y-2 pt-1">

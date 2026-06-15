@@ -8,6 +8,7 @@ import { DEFAULT_ANNUAL_KWH, TDCV_ELECTRICITY_KWH } from '@/lib/consumption'
 import { resolveInstaller } from '@/lib/tenant/resolveInstaller'
 import { buildOptionSet } from '@/lib/recommend/buildOptionSet'
 import type { OptionSetInput } from '@/lib/recommend/optionTypes'
+import type { SentinelConfig } from '@/lib/recommend/sentinel'
 
 const Body = z.object({
   lat: z.number(),
@@ -36,6 +37,8 @@ const Body = z.object({
     monthlyCostGbp: z.number().nullable(),
     householdSize: z.number().nullable(),
   }),
+  tariffType: z.string().nullable().optional(),
+  lifestyle: z.array(z.string()).optional(),
   budgetBandId: z.string().nullable(),
 })
 type BodyT = z.infer<typeof Body>
@@ -108,6 +111,12 @@ export async function POST(
   const bands = (cfg?.budgetBandsJson as Array<{ id: string; maxGbp: number }> | undefined) ?? []
   const budgetMaxGbp = bands.find((x) => x.id === b.budgetBandId)?.maxGbp ?? 30000
 
+  // Sentinel config: JSON blob gated by the top-level installer toggle.
+  const sentinelConfig: SentinelConfig | null =
+    cfg && cfg.sentinelConfigJson
+      ? { ...(cfg.sentinelConfigJson as unknown as SentinelConfig), enabled: cfg.sentinelEnabled }
+      : null
+
   const input: OptionSetInput = {
     catalogue,
     roofMaxPanels: Math.max(1, maxPanelCount),
@@ -118,6 +127,9 @@ export async function POST(
     annualKwh,
     importTariffPence: importPence,
     exportTariffPence: exportPence,
+    tariffType: b.tariffType ?? 'unknown',
+    lifestyle: b.lifestyle ?? [],
+    sentinelConfig,
     mcsZone,
     irradianceKwhPerM2,
     shadingLoss,

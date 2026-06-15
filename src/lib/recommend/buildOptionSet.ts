@@ -8,6 +8,7 @@ import { computeQuote } from '@/lib/pricing/computeQuote'
 import { buildTierPresets, inclusionsForTier } from '@/lib/pricing/tiers'
 import type { PricingCatalogue, PricingContext, SystemConfig } from '@/lib/pricing/types'
 import type { PanelSpec, SolarAssumptions, SolarResults } from '@/lib/types'
+import { computeSentinel, computeSentinelUplift } from './sentinel'
 import type { OptionKind, OptionResult, OptionSet, OptionSetInput, PresetTier } from './optionTypes'
 
 // ─── Scoring (ported from the proven sales-branch engine) ────────────────────
@@ -129,6 +130,11 @@ function makeCandidate(
   const panel = input.catalogue.panels.find((p) => p.sku === config.panelSku)
   const systemKwp = pvRow?.kwp ?? Math.round((count * (panel?.wattPeak ?? 430)) / 10) / 100
 
+  // A modest Sentinel-potential nudge: systems that unlock more optimisation
+  // (battery + smart tariff + EV/heat-pump) score slightly higher.
+  const uplift = computeSentinelUplift(hasBattery, input.tariffType, input.lifestyle, input.sentinelConfig)
+  const score = scoreOf(results) + uplift * net25YearValue(results) * 0.25
+
   return {
     tier,
     config,
@@ -138,7 +144,7 @@ function makeCandidate(
     batteryKwh,
     priceGbp,
     results,
-    score: scoreOf(results),
+    score,
     warnings: quote.warnings,
   }
 }
@@ -166,6 +172,16 @@ function toOption(c: Candidate, kind: OptionKind, isRecommended: boolean, input:
   const battery = c.config.battery
     ? input.catalogue.batteries.find((b) => b.sku === c.config.battery!.sku)
     : null
+  const sentinel = computeSentinel({
+    annualSavingGbp: c.results.annualSavingsPounds,
+    annualExportGbp: (c.results.exportKwh * input.exportTariffPence) / 100,
+    paybackYearsBase: c.results.paybackYears,
+    priceGbp: c.priceGbp,
+    hasBattery: c.hasBattery,
+    tariffType: input.tariffType,
+    lifestyle: input.lifestyle,
+    config: input.sentinelConfig,
+  })
   return {
     id: kind,
     kind,
@@ -181,6 +197,7 @@ function toOption(c: Candidate, kind: OptionKind, isRecommended: boolean, input:
     systemKwp: c.systemKwp,
     priceGbp: c.priceGbp,
     results: c.results,
+    sentinel,
     inclusions: inclusionsForTier(c.tier),
     bestSuitedTo: BEST_SUITED[kind],
     nextStep: NEXT_STEP[kind],

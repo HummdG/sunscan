@@ -198,6 +198,8 @@ export function StartWizard({
           monthlyCostGbp: state.usage.monthlyCostGbp,
           householdSize: state.usage.householdSize,
         },
+        tariffType: state.tariffType,
+        lifestyle: state.lifestyle,
         budgetBandId: state.budgetBandId,
       }
       const res = await fetch(`/api/${installerSlug}/journey/results`, {
