@@ -1,0 +1,121 @@
+prefix,region_name,import_p_per_kwh,standing_p_per_day,seg_p_per_kwh
+AB,North Scotland,28.5,67,15
+IV,North Scotland,28.5,67,15
+KW,North Scotland,28.5,67,15
+HS,North Scotland,28.5,67,15
+ZE,North Scotland,28.5,67,15
+PH,North Scotland,28.5,67,15
+G,South Scotland,26.5,58,15
+EH,South Scotland,26.5,58,15
+KY,South Scotland,26.5,58,15
+DD,South Scotland,26.5,58,15
+FK,South Scotland,26.5,58,15
+ML,South Scotland,26.5,58,15
+PA,South Scotland,26.5,58,15
+KA,South Scotland,26.5,58,15
+DG,South Scotland,26.5,58,15
+TD,South Scotland,26.5,58,15
+NE,North East England,26.8,62,15
+SR,North East England,26.8,62,15
+DH,North East England,26.8,62,15
+DL,North East England,26.8,62,15
+TS,North East England,26.8,62,15
+M,North West England,27.0,52,15
+OL,North West England,27.0,52,15
+SK,North West England,27.0,52,15
+BL,North West England,27.0,52,15
+BB,North West England,27.0,52,15
+PR,North West England,27.0,52,15
+FY,North West England,27.0,52,15
+LA,North West England,27.0,52,15
+CA,North West England,27.0,52,15
+WN,North West England,27.0,52,15
+WA,North West England,27.0,52,15
+LS,Yorkshire,26.5,61,15
+BD,Yorkshire,26.5,61,15
+HD,Yorkshire,26.5,61,15
+HX,Yorkshire,26.5,61,15
+WF,Yorkshire,26.5,61,15
+S,Yorkshire,26.5,61,15
+DN,Yorkshire,26.5,61,15
+HU,Yorkshire,26.5,61,15
+YO,Yorkshire,26.5,61,15
+HG,Yorkshire,26.5,61,15
+L,North Wales and Mersey,28.0,57,15
+CH,North Wales and Mersey,28.0,57,15
+LL,North Wales and Mersey,28.0,57,15
+CW,North Wales and Mersey,28.0,57,15
+CF,South Wales,27.5,58,15
+NP,South Wales,27.5,58,15
+SA,South Wales,27.5,58,15
+LD,South Wales,27.5,58,15
+B,West Midlands,27.2,52,15
+CV,West Midlands,27.2,52,15
+DY,West Midlands,27.2,52,15
+WS,West Midlands,27.2,52,15
+WV,West Midlands,27.2,52,15
+WR,West Midlands,27.2,52,15
+HR,West Midlands,27.2,52,15
+TF,West Midlands,27.2,52,15
+ST,West Midlands,27.2,52,15
+SY,West Midlands,27.2,52,15
+DE,East Midlands,26.5,50,15
+NG,East Midlands,26.5,50,15
+LE,East Midlands,26.5,50,15
+LN,East Midlands,26.5,50,15
+NN,East Midlands,26.5,50,15
+NR,East England,26.7,50,15
+IP,East England,26.7,50,15
+CB,East England,26.7,50,15
+CO,East England,26.7,50,15
+CM,East England,26.7,50,15
+SS,East England,26.7,50,15
+SG,East England,26.7,50,15
+AL,East England,26.7,50,15
+LU,East England,26.7,50,15
+EN,East England,26.7,50,15
+IG,East England,26.7,50,15
+RM,East England,26.7,50,15
+PE,East England,26.7,50,15
+BS,South West England,28.5,63,15
+BA,South West England,28.5,63,15
+GL,South West England,28.5,63,15
+EX,South West England,28.5,63,15
+PL,South West England,28.5,63,15
+TQ,South West England,28.5,63,15
+TR,South West England,28.5,63,15
+TA,South West England,28.5,63,15
+DT,South West England,28.5,63,15
+SN,South West England,28.5,63,15
+BH,South West England,28.5,63,15
+SO,Southern England,27.0,50,15
+PO,Southern England,27.0,50,15
+RG,Southern England,27.0,50,15
+SP,Southern England,27.0,50,15
+OX,Southern England,27.0,50,15
+HP,Southern England,27.0,50,15
+E,London,26.0,46,15
+EC,London,26.0,46,15
+N,London,26.0,46,15
+NW,London,26.0,46,15
+SE,London,26.0,46,15
+SW,London,26.0,46,15
+W,London,26.0,46,15
+WC,London,26.0,46,15
+ME,South East England,27.0,50,15
+CT,South East England,27.0,50,15
+TN,South East England,27.0,50,15
+BN,South East England,27.0,50,15
+RH,South East England,27.0,50,15
+GU,South East England,27.0,50,15
+SL,South East England,27.0,50,15
+CR,South East England,27.0,50,15
+BR,South East England,27.0,50,15
+DA,South East England,27.0,50,15
+HA,South East England,27.0,50,15
+KT,South East England,27.0,50,15
+SM,South East England,27.0,50,15
+TW,South East England,27.0,50,15
+UB,South East England,27.0,50,15
+WD,South East England,27.0,50,15
+MK,South East England,27.0,50,15
