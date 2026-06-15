@@ -62,6 +62,7 @@ export default async function StartPage({ params, searchParams }: Props) {
     <main className="mx-auto max-w-2xl px-6 py-12">
       <StartWizard
         installerSlug={installerSlug}
+        installerName={installer.name}
         brand={{ primary, accent }}
         budgetBands={budgetBands}
         surveyOptions={surveyOptions}

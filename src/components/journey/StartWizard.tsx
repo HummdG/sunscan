@@ -19,6 +19,8 @@ import { TariffStep } from './steps/TariffStep'
 import { ExistingStep } from './steps/ExistingStep'
 import { MotivationStep } from './steps/MotivationStep'
 import { GhostButton, PrimaryButton } from './ui'
+import { ResultsView } from './ResultsView'
+import type { OptionSet } from '@/lib/recommend/optionTypes'
 
 // ─── Props ────────────────────────────────────────────────────────────────────
 
@@ -37,6 +39,7 @@ export interface SurveyOptions {
 
 interface StartWizardProps {
   installerSlug: string
+  installerName: string
   brand: { primary: string; accent: string }
   budgetBands: BudgetBand[]
   surveyOptions: SurveyOptions
@@ -147,6 +150,7 @@ function surveyModeLabel(opts: SurveyOptions): string {
 
 export function StartWizard({
   installerSlug,
+  installerName,
   brand,
   budgetBands,
   surveyOptions,
@@ -154,7 +158,9 @@ export function StartWizard({
 }: StartWizardProps) {
   const [state, dispatch] = useReducer(journeyReducer, createInitialJourneyState(intent))
   const [surveyRequested, setSurveyRequested] = useState(false)
-  const [finished, setFinished] = useState(false)
+  const [submitting, setSubmitting] = useState(false)
+  const [optionSet, setOptionSet] = useState<OptionSet | null>(null)
+  const [error, setError] = useState<string | null>(null)
 
   const steps = useMemo(() => visibleSteps(state), [state])
   const step = currentStep(state)
@@ -163,30 +169,63 @@ export function StartWizard({
   const isLast = step === 'motivation'
   const advanceable = canAdvance(state, step)
 
-  const installerName = installerSlug
+  const submitResults = async () => {
+    if (!state.address || !state.roof) {
+      setError('We’re missing your address or roof details. Please go back and complete them.')
+      return
+    }
+    setSubmitting(true)
+    setError(null)
+    try {
+      const body = {
+        lat: state.address.lat,
+        lng: state.address.lng,
+        postcode: state.address.postcode,
+        uprn: state.address.uprn,
+        roof: {
+          pitchDeg: state.roof.pitchDeg,
+          mcsOrientationDeg: state.roof.mcsOrientationDeg,
+          maxPanelCount: state.roof.maxPanelCount,
+          roofType: state.roof.roofType,
+          confidence: state.roof.confidence,
+        },
+        roofFallback: state.roofFallback,
+        usage: {
+          source: state.usage.source,
+          annualKwh: state.usage.annualKwh,
+          unitRatePence: state.usage.unitRatePence,
+          exportTariffPence: state.usage.exportTariffPence,
+          monthlyCostGbp: state.usage.monthlyCostGbp,
+          householdSize: state.usage.householdSize,
+        },
+        budgetBandId: state.budgetBandId,
+      }
+      const res = await fetch(`/api/${installerSlug}/journey/results`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      if (!res.ok) {
+        throw new Error(`Results request failed (${res.status})`)
+      }
+      const data = (await res.json()) as OptionSet
+      setOptionSet(data)
+    } catch {
+      setError(
+        'Sorry — we couldn’t prepare your options just now. Please try again in a moment.',
+      )
+    } finally {
+      setSubmitting(false)
+    }
+  }
 
   const handleContinue = () => {
     if (!advanceable) return
     if (isLast) {
-      setFinished(true)
+      void submitResults()
       return
     }
     dispatch({ type: 'NEXT' })
-  }
-
-  const usageSummary = (): string => {
-    const u = state.usage
-    switch (u.source) {
-      case 'bill_ocr':
-      case 'manual_kwh':
-        return u.annualKwh != null ? `${u.annualKwh.toLocaleString()} kWh / year` : '—'
-      case 'monthly_cost':
-        return u.monthlyCostGbp != null ? `£${u.monthlyCostGbp} / month` : '—'
-      case 'household':
-        return u.householdSize != null ? `${u.householdSize}-person household` : '—'
-      default:
-        return '—'
-    }
   }
 
   const renderStep = () => {
@@ -214,60 +253,41 @@ export function StartWizard({
     }
   }
 
-  if (finished) {
+  // Results take over the full width (no wizard chrome / progress rail).
+  if (optionSet) {
+    return (
+      <div style={{ animation: 'ss-fade-up 0.45s ease both' }}>
+        <style>{FADE_UP_KEYFRAMES}</style>
+        <ResultsView
+          optionSet={optionSet}
+          installerName={installerName}
+          brandPrimary={brand.primary}
+          surveyOptions={surveyOptions}
+        />
+      </div>
+    )
+  }
+
+  if (submitting) {
     return (
       <div className="space-y-6">
         <style>{FADE_UP_KEYFRAMES}</style>
-        <div style={{ animation: 'ss-fade-up 0.45s ease both' }} className="space-y-6">
-          <header className="space-y-3">
-            <p
-              className="ss-mono text-[11px] uppercase"
-              style={{ letterSpacing: '0.22em', color: 'var(--ss-t4)' }}
-            >
-              All done
-            </p>
-            <h2
-              className="ss-heading text-2xl sm:text-[1.9rem] font-semibold tracking-tight"
-              style={{ color: 'var(--ss-t1)' }}
-            >
-              We&apos;re preparing your three system options…
-            </h2>
-            <p className="text-base leading-relaxed" style={{ color: 'var(--ss-t2)' }}>
-              Thanks — we have everything we need. Here&apos;s a quick summary of what you told us.
-            </p>
-          </header>
-
-          <dl
-            className="grid grid-cols-1 gap-x-6 gap-y-3 rounded-xl p-5 sm:grid-cols-2"
-            style={{ background: 'var(--ss-s1)', border: '1.5px solid var(--ss-border)' }}
+        <div style={{ animation: 'ss-fade-up 0.45s ease both' }} className="space-y-3">
+          <p
+            className="ss-mono text-[11px] uppercase"
+            style={{ letterSpacing: '0.22em', color: 'var(--ss-t4)' }}
           >
-            <SummaryRow label="Address" value={state.address?.raw ?? '—'} />
-            <SummaryRow
-              label="Roof"
-              value={
-                state.roof
-                  ? `${state.roof.maxPanelCount} panels · ${state.roof.kwpPotential.toFixed(2)} kWp`
-                  : '—'
-              }
-            />
-            <SummaryRow label="Property" value={state.propertyType ?? '—'} />
-            <SummaryRow label="Electricity use" value={usageSummary()} />
-            <SummaryRow
-              label="Lifestyle"
-              value={state.lifestyle.length ? `${state.lifestyle.length} selected` : 'None selected'}
-            />
-            <SummaryRow label="Tariff" value={state.tariffType ?? '—'} />
-            <SummaryRow label="Existing system" value={state.existing ?? '—'} />
-            <SummaryRow label="Main goal" value={state.motivation ?? '—'} />
-            <SummaryRow
-              label="Budget"
-              value={budgetBands.find((b) => b.id === state.budgetBandId)?.label ?? '—'}
-            />
-            <SummaryRow label="Finance" value={state.financeInterest ?? '—'} />
-          </dl>
-
-          <p className="text-sm" style={{ color: 'var(--ss-t3)' }}>
-            Your three tailored options will appear here shortly.
+            Almost there
+          </p>
+          <h2
+            className="ss-heading text-2xl sm:text-[1.9rem] font-semibold tracking-tight"
+            style={{ color: 'var(--ss-t1)' }}
+          >
+            Preparing your three options…
+          </h2>
+          <p className="text-base leading-relaxed" style={{ color: 'var(--ss-t2)' }}>
+            We&apos;re matching your property, roof and usage against {installerName}&apos;s
+            available systems.
           </p>
         </div>
       </div>
@@ -294,6 +314,20 @@ export function StartWizard({
           {isLast ? 'See my 3 options' : 'Continue'}
         </PrimaryButton>
       </div>
+
+      {error ? (
+        <div
+          className="rounded-xl p-4 text-sm"
+          style={{
+            background: 'color-mix(in srgb, var(--ss-t4) 8%, var(--ss-s1))',
+            border: '1.5px solid var(--ss-border-h)',
+            color: 'var(--ss-t2)',
+          }}
+          role="alert"
+        >
+          {error}
+        </div>
+      ) : null}
 
       {/* Persistent secondary CTA */}
       <div
@@ -327,22 +361,6 @@ export function StartWizard({
       </div>
 
       <p className="sr-only">Installer brand: {brand.primary}</p>
-    </div>
-  )
-}
-
-function SummaryRow({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex flex-col gap-0.5">
-      <dt
-        className="ss-mono text-[10px] uppercase"
-        style={{ letterSpacing: '0.18em', color: 'var(--ss-t4)' }}
-      >
-        {label}
-      </dt>
-      <dd className="text-sm font-medium capitalize" style={{ color: 'var(--ss-t1)' }}>
-        {value}
-      </dd>
     </div>
   )
 }
