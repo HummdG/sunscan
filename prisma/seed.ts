@@ -317,6 +317,15 @@ async function main() {
   })
   console.log('  ✓ installer branding')
 
+  // ── Installer user (dashboard login via Supabase magic-link) ──
+  const ownerEmail = (process.env.HSENERGY_OWNER_EMAIL ?? 'hummd2001@gmail.com').toLowerCase()
+  await prisma.installerUser.upsert({
+    where: { email: ownerEmail },
+    update: { installerId, role: 'owner' },
+    create: { installerId, email: ownerEmail, role: 'owner' },
+  })
+  console.log(`  ✓ installer user ${ownerEmail}`)
+
   // ── Pricing catalogue (all scoped by installerId) ──
   for (const row of PV_BASE) {
     await prisma.pricingPvBasePrice.upsert({
