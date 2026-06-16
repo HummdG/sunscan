@@ -5,17 +5,42 @@ import { prisma } from '@/lib/db'
 import { resolveInstaller } from '@/lib/tenant/resolveInstaller'
 import { scoreLead } from '@/lib/lead/scoreLead'
 import { deliverLead } from '@/lib/lead/deliver'
+import { sendEmail } from '@/lib/email/resend'
 import { DEFAULT_ANNUAL_KWH } from '@/lib/consumption'
+import { getZoneForPostcode, getIrradianceKwhPerM2 } from '@/lib/mcs'
+import { getTariffForPostcode } from '@/lib/tariff'
+import { DEFAULT_ASSUMPTIONS } from '@/lib/solarCalculations'
+import { generateReportForLead } from '@/lib/report/generateForLead'
+import type { SolarResults } from '@/lib/types'
+
+const ResultsSchema = z
+  .object({
+    paybackYears: z.number(),
+    annualSavingsPounds: z.number(),
+    annualGenerationKwh: z.number(),
+    selfConsumptionKwh: z.number(),
+    exportKwh: z.number(),
+    co2SavedTonnesPerYear: z.number(),
+    monthlyGenKwh: z.array(z.number()),
+    twentyFiveYearSavings: z.array(
+      z.object({ year: z.number(), saving: z.number(), cumulative: z.number() }),
+    ),
+  })
+  .passthrough()
 
 const OptionSchema = z
   .object({
     kind: z.string(),
     label: z.string(),
+    isRecommended: z.boolean().optional(),
     panelCount: z.number(),
     systemKwp: z.number(),
     priceGbp: z.number(),
+    panelType: z.string(),
+    inverterType: z.string(),
     batteryType: z.string().nullable().optional(),
-    results: z.object({ paybackYears: z.number(), annualSavingsPounds: z.number() }).passthrough(),
+    batteryCapacityKwh: z.number(),
+    results: ResultsSchema,
     sentinel: z.object({ enabled: z.boolean(), upliftPercent: z.number() }).passthrough(),
   })
   .passthrough()
@@ -37,10 +62,15 @@ const Body = z.object({
   }),
   journey: z.object({
     uprn: z.string().nullable().optional(),
+    lat: z.number().nullable().optional(),
+    lng: z.number().nullable().optional(),
     roof: z.object({
       confidence: z.enum(['high', 'medium', 'low']),
       maxPanelCount: z.number(),
       kwpPotential: z.number(),
+      pitchDeg: z.number().nullable().optional(),
+      mcsOrientationDeg: z.number().nullable().optional(),
+      roofType: z.string().nullable().optional(),
     }),
     propertyType: z.string(),
     ownership: z.string(),
@@ -237,10 +267,81 @@ export async function POST(
     webhookPayload,
   })
 
+  // On report-request, generate the gated detailed PDF for the recommended option.
+  let reportUrl: string | null = null
+  if (reportRequested && j.lat != null && j.lng != null) {
+    const recommended =
+      b.optionSet.options.find((o) => o.kind === b.optionSet.recommendedId) ??
+      b.optionSet.options.find((o) => o.isRecommended) ??
+      b.optionSet.options[0]
+    if (recommended) {
+      try {
+        const regional = getTariffForPostcode(b.contact.postcode)
+        const mcsZone = getZoneForPostcode(b.contact.postcode)
+        const pitch = j.roof.pitchDeg ?? DEFAULT_ASSUMPTIONS.roofPitchDeg
+        const orient = j.roof.mcsOrientationDeg ?? DEFAULT_ASSUMPTIONS.roofOrientationDeg
+        const gen = await generateReportForLead({
+          installerId: installer.id,
+          addressRaw: b.contact.addressRaw,
+          postcode: b.contact.postcode,
+          lat: j.lat,
+          lng: j.lng,
+          uprn: j.uprn ?? null,
+          annualKwh: j.usage.annualKwh ?? DEFAULT_ANNUAL_KWH,
+          importPence: regional.importPencePerKwh,
+          standingPence: regional.standingChargePencePerDay,
+          exportPence: regional.segExportPencePerKwh,
+          billSource: j.usage.source === 'bill_ocr' ? 'ocr' : 'manual',
+          mcsZone,
+          irradianceKwhPerM2: getIrradianceKwhPerM2(mcsZone, pitch, orient),
+          assumptions: {
+            ...DEFAULT_ASSUMPTIONS,
+            roofPitchDeg: pitch,
+            roofOrientationDeg: orient,
+            shadingLoss: cfg?.shadingLoss ?? DEFAULT_ASSUMPTIONS.shadingLoss,
+            inverterLoss: cfg?.inverterLoss ?? DEFAULT_ASSUMPTIONS.inverterLoss,
+            systemLoss: cfg?.systemLoss ?? DEFAULT_ASSUMPTIONS.systemLoss,
+            exportTariffPencePerKwh: regional.segExportPencePerKwh,
+            energyInflationRate: cfg?.energyInflationRate ?? DEFAULT_ASSUMPTIONS.energyInflationRate,
+            panelDegradationPerYear:
+              cfg?.panelDegradationPerYear ?? DEFAULT_ASSUMPTIONS.panelDegradationPerYear,
+            hasBattery: !!recommended.batteryType,
+            batteryKwh: recommended.batteryCapacityKwh,
+            systemCostPounds: recommended.priceGbp,
+          },
+          option: {
+            panelCount: recommended.panelCount,
+            systemKwp: recommended.systemKwp,
+            panelType: recommended.panelType,
+            inverterType: recommended.inverterType,
+            batteryType: recommended.batteryType ?? null,
+            batteryCapacityKwh: recommended.batteryCapacityKwh,
+            results: recommended.results as unknown as SolarResults,
+          },
+        })
+        reportUrl = gen.pdfUrl
+        await prisma.lead
+          .update({ where: { id: lead.id }, data: { reportId: gen.reportId } })
+          .catch(() => {})
+        if (reportUrl) {
+          await sendEmail({
+            to: b.contact.email,
+            subject: `Your indicative solar & battery estimate — ${installer.name}`,
+            html: `<div style="font-family:system-ui,sans-serif"><p>Hi ${esc(b.contact.firstName)},</p><p>Thanks for using ${esc(installer.name)}'s solar &amp; battery calculator. Your indicative report is ready:</p><p><a href="${reportUrl}">Download your estimate (PDF)</a></p><p>This is an indicative estimate only — ${esc(installer.name)} will be in touch to confirm the detail with a survey.</p></div>`,
+            replyTo: cfg?.notificationEmail ?? undefined,
+          })
+        }
+      } catch (e) {
+        console.error('Report generation failed for lead', lead.id, e)
+      }
+    }
+  }
+
   return NextResponse.json({
     ok: true,
     leadId: lead.id,
     band,
+    reportUrl,
     delivery: {
       emailSent: delivery.emailSent,
       emailSkipped: delivery.emailSkipped,

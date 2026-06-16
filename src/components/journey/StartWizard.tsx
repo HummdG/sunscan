@@ -28,10 +28,15 @@ import type { OptionSet } from '@/lib/recommend/optionTypes'
 function buildLeadJourney(state: JourneyState): LeadJourney {
   return {
     uprn: state.address?.uprn,
+    lat: state.address?.lat,
+    lng: state.address?.lng,
     roof: {
       confidence: state.roof?.confidence ?? 'low',
       maxPanelCount: state.roof?.maxPanelCount ?? 0,
       kwpPotential: state.roof?.kwpPotential ?? 0,
+      pitchDeg: state.roof?.pitchDeg,
+      mcsOrientationDeg: state.roof?.mcsOrientationDeg,
+      roofType: state.roof?.roofType,
     },
     propertyType: state.propertyType ?? 'other',
     ownership: state.ownership ?? 'other',

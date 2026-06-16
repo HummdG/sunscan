@@ -16,7 +16,16 @@ export interface ResultsSurveyOptions {
 /** Minimal journey payload the lead API needs (built by StartWizard). */
 export interface LeadJourney {
   uprn?: string
-  roof: { confidence: 'high' | 'medium' | 'low'; maxPanelCount: number; kwpPotential: number }
+  lat?: number
+  lng?: number
+  roof: {
+    confidence: 'high' | 'medium' | 'low'
+    maxPanelCount: number
+    kwpPotential: number
+    pitchDeg?: number
+    mcsOrientationDeg?: number
+    roofType?: string
+  }
   propertyType: string
   ownership: string
   usage: { source: string | null; annualKwh: number | null; monthlyCostGbp: number | null }
