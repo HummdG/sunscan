@@ -3,6 +3,8 @@ import { z } from 'zod'
 import { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/db'
 import { resolveInstaller } from '@/lib/tenant/resolveInstaller'
+import { rateLimit } from '@/lib/rateLimit'
+import { isInCoverage } from '@/lib/coverage'
 import { scoreLead } from '@/lib/lead/scoreLead'
 import { deliverLead } from '@/lib/lead/deliver'
 import { sendEmail } from '@/lib/email/resend'
@@ -143,6 +145,9 @@ export async function POST(
   req: Request,
   { params }: { params: Promise<{ installerSlug: string }> },
 ) {
+  const limited = rateLimit(req, { key: 'lead', limit: 10, windowMs: 60_000 })
+  if (limited) return limited
+
   const { installerSlug } = await params
   const installer = await resolveInstaller(installerSlug)
   if (!installer) return NextResponse.json({ error: 'unknown-installer' }, { status: 404 })
@@ -160,6 +165,7 @@ export async function POST(
 
   const bands = (cfg?.budgetBandsJson as Array<{ id: string; maxGbp: number }> | undefined) ?? []
   const budgetMaxGbp = bands.find((x) => x.id === j.budgetBandId)?.maxGbp ?? 30000
+  const outsideCoverage = !isInCoverage(b.contact.postcode, cfg?.coverageAreasJson)
 
   const reportRequested = b.outcome === 'report'
   const surveyRequested = b.outcome === 'survey'
@@ -237,6 +243,7 @@ export async function POST(
     leadSource: 'SunScan Calculator',
     score: band,
     scoreValue: score,
+    outsideCoverage,
     outcome: b.outcome,
     surveyType: b.surveyType ?? null,
     contact: b.contact,

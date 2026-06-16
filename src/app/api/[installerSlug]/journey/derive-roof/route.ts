@@ -5,6 +5,7 @@ import { fetchBuilding } from '@/lib/osApi'
 import { deriveGeometry } from '@/lib/recommend/deriveGeometry'
 import { deriveSiteContext } from '@/lib/pricing/siteContext'
 import { resolveInstaller } from '@/lib/tenant/resolveInstaller'
+import { rateLimit } from '@/lib/rateLimit'
 import type { RoofConfidence } from '@/lib/journey/types'
 
 const BodySchema = z.object({
@@ -30,6 +31,9 @@ export async function POST(
   req: Request,
   { params }: { params: Promise<{ installerSlug: string }> },
 ) {
+  const limited = rateLimit(req, { key: 'derive-roof', limit: 30, windowMs: 60_000 })
+  if (limited) return limited
+
   const { installerSlug } = await params
   const installer = await resolveInstaller(installerSlug)
   if (!installer) return NextResponse.json({ error: 'unknown-installer' }, { status: 404 })

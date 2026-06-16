@@ -7,6 +7,7 @@ import { getTariffForPostcode } from '@/lib/tariff'
 import { DEFAULT_ANNUAL_KWH, TDCV_ELECTRICITY_KWH } from '@/lib/consumption'
 import { resolveInstaller } from '@/lib/tenant/resolveInstaller'
 import { buildOptionSet } from '@/lib/recommend/buildOptionSet'
+import { rateLimit } from '@/lib/rateLimit'
 import type { OptionSetInput } from '@/lib/recommend/optionTypes'
 import type { SentinelConfig } from '@/lib/recommend/sentinel'
 
@@ -70,6 +71,9 @@ export async function POST(
   req: Request,
   { params }: { params: Promise<{ installerSlug: string }> },
 ) {
+  const limited = rateLimit(req, { key: 'results', limit: 20, windowMs: 60_000 })
+  if (limited) return limited
+
   const { installerSlug } = await params
   const installer = await resolveInstaller(installerSlug)
   if (!installer) return NextResponse.json({ error: 'unknown-installer' }, { status: 404 })
