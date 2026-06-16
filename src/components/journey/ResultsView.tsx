@@ -1,8 +1,9 @@
 'use client'
 
-import { useState } from 'react'
+import { useId, useMemo, useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
 import type { OptionResult, OptionSet } from '@/lib/recommend/optionTypes'
+import { TextField } from './ui'
 
 // ─── Props ────────────────────────────────────────────────────────────────────
 
@@ -12,11 +13,29 @@ export interface ResultsSurveyOptions {
   installerChoice: boolean
 }
 
+/** Minimal journey payload the lead API needs (built by StartWizard). */
+export interface LeadJourney {
+  uprn?: string
+  roof: { confidence: 'high' | 'medium' | 'low'; maxPanelCount: number; kwpPotential: number }
+  propertyType: string
+  ownership: string
+  usage: { source: string | null; annualKwh: number | null; monthlyCostGbp: number | null }
+  tariffType: string | null
+  existing: string | null
+  lifestyle: string[]
+  motivation: string | null
+  budgetBandId: string | null
+  financeInterest: string | null
+}
+
 interface ResultsViewProps {
   optionSet: OptionSet
   installerName: string
   brandPrimary: string
   surveyOptions?: ResultsSurveyOptions
+  installerSlug: string
+  leadJourney: LeadJourney
+  prefill: { addressRaw: string; postcode: string }
 }
 
 // ─── Copy ─────────────────────────────────────────────────────────────────────
@@ -31,16 +50,6 @@ const DISCLAIMER_COPY =
   'electrical checks, shading assessment, confirmed usage and tariff details.'
 
 const FOOTER_COPY = 'All figures are indicative and labelled per option.'
-
-function surveyModeLabel(opts?: ResultsSurveyOptions): string {
-  if (!opts) return 'They will be in touch to arrange the next steps.'
-  if (opts.installerChoice || (opts.remote && opts.onsite)) {
-    return 'They can arrange a remote or on-site survey, whichever suits you best.'
-  }
-  if (opts.remote) return "They'll arrange a remote survey at a time that suits you."
-  if (opts.onsite) return "They'll arrange an on-site survey at a time that suits you."
-  return 'They will be in touch to arrange the next steps.'
-}
 
 // ─── Cell formatters (shared by cards + table) ──────────────────────────────────
 
@@ -314,33 +323,442 @@ function ComparisonTable({
   )
 }
 
+// ─── Lead capture ───────────────────────────────────────────────────────────────
+
+type LeadOutcome = 'report' | 'survey'
+type SurveyType = 'remote' | 'onsite' | 'installer_choice'
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+
+interface ContactForm {
+  firstName: string
+  lastName: string
+  email: string
+  phone: string
+  addressRaw: string
+  postcode: string
+  preferredContact: '' | 'email' | 'phone'
+  bestTime: string
+  comments: string
+  consent: boolean
+}
+
+function emptyContact(prefill: { addressRaw: string; postcode: string }): ContactForm {
+  return {
+    firstName: '',
+    lastName: '',
+    email: '',
+    phone: '',
+    addressRaw: prefill.addressRaw,
+    postcode: prefill.postcode,
+    preferredContact: '',
+    bestTime: '',
+    comments: '',
+    consent: false,
+  }
+}
+
+function contactIsValid(c: ContactForm): boolean {
+  return (
+    c.firstName.trim() !== '' &&
+    c.lastName.trim() !== '' &&
+    EMAIL_RE.test(c.email.trim()) &&
+    c.addressRaw.trim() !== '' &&
+    c.postcode.trim() !== '' &&
+    c.consent
+  )
+}
+
+/** Survey-type choices, filtered to the installer's enabled survey modes. */
+function surveyChoices(opts?: ResultsSurveyOptions): { value: SurveyType; label: string }[] {
+  const out: { value: SurveyType; label: string }[] = []
+  if (!opts || opts.remote) out.push({ value: 'remote', label: 'Remote survey' })
+  if (!opts || opts.onsite) out.push({ value: 'onsite', label: 'On-site survey' })
+  if (!opts || opts.installerChoice) {
+    out.push({ value: 'installer_choice', label: 'Let the installer choose' })
+  }
+  return out
+}
+
+function SurveyTypeChoice({
+  choices,
+  value,
+  onSelect,
+  brandPrimary,
+}: {
+  choices: { value: SurveyType; label: string }[]
+  value: SurveyType | null
+  onSelect: (v: SurveyType) => void
+  brandPrimary: string
+}) {
+  return (
+    <fieldset className="space-y-2">
+      <legend className="mb-1.5 text-sm font-medium" style={{ color: 'var(--ss-t2)' }}>
+        Survey type
+      </legend>
+      <div className="grid gap-3 sm:grid-cols-3" role="radiogroup" aria-label="Survey type">
+        {choices.map((c) => {
+          const selected = value === c.value
+          return (
+            <button
+              key={c.value}
+              type="button"
+              role="radio"
+              aria-checked={selected}
+              onClick={() => onSelect(c.value)}
+              className="rounded-xl px-4 py-3 text-left text-sm font-medium transition focus:outline-none"
+              style={{
+                background: selected
+                  ? `color-mix(in srgb, ${brandPrimary} 8%, var(--ss-s1))`
+                  : 'var(--ss-s1)',
+                border: `1.5px solid ${selected ? brandPrimary : 'var(--ss-border)'}`,
+                color: 'var(--ss-t1)',
+              }}
+            >
+              {c.label}
+            </button>
+          )
+        })}
+      </div>
+    </fieldset>
+  )
+}
+
+function ConsentCheckbox({
+  checked,
+  onChange,
+  brandPrimary,
+  id,
+}: {
+  checked: boolean
+  onChange: (v: boolean) => void
+  brandPrimary: string
+  id: string
+}) {
+  return (
+    <label htmlFor={id} className="flex cursor-pointer items-start gap-3">
+      <input
+        id={id}
+        type="checkbox"
+        checked={checked}
+        onChange={(e) => onChange(e.target.checked)}
+        className="mt-0.5 h-5 w-5 shrink-0 cursor-pointer rounded"
+        style={{ accentColor: brandPrimary }}
+      />
+      <span className="text-sm leading-snug" style={{ color: 'var(--ss-t2)' }}>
+        I agree to be contacted about my solar and battery estimate.
+      </span>
+    </label>
+  )
+}
+
+function buildLeadBody(
+  outcome: LeadOutcome,
+  surveyType: SurveyType | null,
+  contact: ContactForm,
+  leadJourney: LeadJourney,
+  optionSet: OptionSet,
+) {
+  return {
+    outcome,
+    ...(outcome === 'survey' ? { surveyType } : {}),
+    contact: {
+      firstName: contact.firstName.trim(),
+      lastName: contact.lastName.trim(),
+      email: contact.email.trim(),
+      phone: contact.phone.trim() || undefined,
+      addressRaw: contact.addressRaw.trim(),
+      postcode: contact.postcode.trim(),
+      preferredContact: contact.preferredContact || undefined,
+      bestTime: contact.bestTime.trim() || undefined,
+      comments: contact.comments.trim() || undefined,
+      consent: contact.consent,
+    },
+    journey: leadJourney,
+    optionSet: { recommendedId: optionSet.recommendedId, options: optionSet.options },
+  }
+}
+
+function LeadForm({
+  outcome,
+  installerName,
+  brandPrimary,
+  surveyOptions,
+  installerSlug,
+  leadJourney,
+  optionSet,
+  prefill,
+  onCancel,
+}: {
+  outcome: LeadOutcome
+  installerName: string
+  brandPrimary: string
+  surveyOptions?: ResultsSurveyOptions
+  installerSlug: string
+  leadJourney: LeadJourney
+  optionSet: OptionSet
+  prefill: { addressRaw: string; postcode: string }
+  onCancel: () => void
+}) {
+  const baseId = useId()
+  const [contact, setContact] = useState<ContactForm>(() => emptyContact(prefill))
+  const choices = useMemo(() => surveyChoices(surveyOptions), [surveyOptions])
+  const [surveyType, setSurveyType] = useState<SurveyType | null>(
+    outcome === 'survey' ? (choices[0]?.value ?? null) : null,
+  )
+  const [status, setStatus] = useState<'idle' | 'submitting' | 'success' | 'error'>('idle')
+
+  const set = <K extends keyof ContactForm>(key: K, value: ContactForm[K]) =>
+    setContact((c) => ({ ...c, [key]: value }))
+
+  const isSurvey = outcome === 'survey'
+  const surveyOk = !isSurvey || surveyType !== null || choices.length === 0
+  const canSubmit = contactIsValid(contact) && surveyOk && status !== 'submitting'
+
+  const submit = async () => {
+    if (!canSubmit) return
+    setStatus('submitting')
+    try {
+      const res = await fetch(`/api/${installerSlug}/lead`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(
+          buildLeadBody(outcome, surveyType, contact, leadJourney, optionSet),
+        ),
+      })
+      if (!res.ok) throw new Error(`Lead request failed (${res.status})`)
+      setStatus('success')
+    } catch {
+      setStatus('error')
+    }
+  }
+
+  if (status === 'success') {
+    return (
+      <div
+        className="space-y-1.5 rounded-xl p-5"
+        style={{ background: 'var(--ss-s1)', border: '1.5px solid var(--ss-border)' }}
+        role="status"
+      >
+        <p className="text-base font-semibold" style={{ color: 'var(--ss-t1)' }}>
+          Thanks, your {isSurvey ? 'survey' : 'report'} request has been received.
+        </p>
+        <p className="text-sm leading-relaxed" style={{ color: 'var(--ss-t3)' }}>
+          {installerName} will review your details and be in touch. To make your estimate
+          more accurate, have a recent electricity bill or annual kWh figure handy.
+        </p>
+      </div>
+    )
+  }
+
+  const submitting = status === 'submitting'
+
+  return (
+    <form
+      className="space-y-5 rounded-2xl p-5 sm:p-6"
+      style={{ background: 'var(--ss-s1)', border: '1.5px solid var(--ss-border)' }}
+      onSubmit={(e) => {
+        e.preventDefault()
+        void submit()
+      }}
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div className="space-y-1">
+          <Mono>{isSurvey ? 'Book a free survey' : 'Get my detailed report'}</Mono>
+          <h3
+            className="ss-heading text-xl font-semibold tracking-tight"
+            style={{ color: 'var(--ss-t1)' }}
+          >
+            {isSurvey ? 'Request a survey' : 'Request your detailed report'}
+          </h3>
+        </div>
+        <button
+          type="button"
+          onClick={onCancel}
+          className="ss-mono text-[11px] uppercase transition hover:underline"
+          style={{ letterSpacing: '0.16em', color: 'var(--ss-t4)' }}
+        >
+          Cancel
+        </button>
+      </div>
+
+      {isSurvey && choices.length > 0 ? (
+        <SurveyTypeChoice
+          choices={choices}
+          value={surveyType}
+          onSelect={setSurveyType}
+          brandPrimary={brandPrimary}
+        />
+      ) : null}
+
+      <div className="grid gap-4 sm:grid-cols-2">
+        <TextField
+          id={`${baseId}-first`}
+          label="First name *"
+          value={contact.firstName}
+          onChange={(v) => set('firstName', v)}
+        />
+        <TextField
+          id={`${baseId}-last`}
+          label="Last name *"
+          value={contact.lastName}
+          onChange={(v) => set('lastName', v)}
+        />
+        <TextField
+          id={`${baseId}-email`}
+          label="Email *"
+          placeholder="you@example.com"
+          value={contact.email}
+          onChange={(v) => set('email', v)}
+        />
+        <TextField
+          id={`${baseId}-phone`}
+          label="Phone"
+          value={contact.phone}
+          onChange={(v) => set('phone', v)}
+        />
+        <TextField
+          id={`${baseId}-address`}
+          label="Address *"
+          value={contact.addressRaw}
+          onChange={(v) => set('addressRaw', v)}
+        />
+        <TextField
+          id={`${baseId}-postcode`}
+          label="Postcode *"
+          value={contact.postcode}
+          onChange={(v) => set('postcode', v)}
+        />
+      </div>
+
+      <div className="grid gap-4 sm:grid-cols-2">
+        <fieldset>
+          <legend className="mb-1.5 text-sm font-medium" style={{ color: 'var(--ss-t2)' }}>
+            Preferred contact method
+          </legend>
+          <div className="flex gap-3" role="radiogroup" aria-label="Preferred contact method">
+            {(['email', 'phone'] as const).map((m) => {
+              const selected = contact.preferredContact === m
+              return (
+                <button
+                  key={m}
+                  type="button"
+                  role="radio"
+                  aria-checked={selected}
+                  onClick={() => set('preferredContact', selected ? '' : m)}
+                  className="flex-1 rounded-xl px-4 py-3 text-sm font-medium capitalize transition focus:outline-none"
+                  style={{
+                    background: selected
+                      ? `color-mix(in srgb, ${brandPrimary} 8%, var(--ss-s1))`
+                      : 'var(--ss-ink)',
+                    border: `1.5px solid ${selected ? brandPrimary : 'var(--ss-border-h)'}`,
+                    color: 'var(--ss-t1)',
+                  }}
+                >
+                  {m}
+                </button>
+              )
+            })}
+          </div>
+        </fieldset>
+        <TextField
+          id={`${baseId}-besttime`}
+          label="Best time to contact"
+          placeholder="e.g. weekday evenings"
+          value={contact.bestTime}
+          onChange={(v) => set('bestTime', v)}
+        />
+      </div>
+
+      <TextField
+        id={`${baseId}-comments`}
+        label="Additional comments"
+        value={contact.comments}
+        onChange={(v) => set('comments', v)}
+      />
+
+      <ConsentCheckbox
+        id={`${baseId}-consent`}
+        checked={contact.consent}
+        onChange={(v) => set('consent', v)}
+        brandPrimary={brandPrimary}
+      />
+
+      {status === 'error' ? (
+        <div
+          className="rounded-xl p-4 text-sm"
+          style={{
+            background: 'color-mix(in srgb, var(--ss-t4) 8%, var(--ss-s1))',
+            border: '1.5px solid var(--ss-border-h)',
+            color: 'var(--ss-t2)',
+          }}
+          role="alert"
+        >
+          Sorry — we couldn&apos;t submit your request just now. Please try again.
+        </div>
+      ) : null}
+
+      <div className="flex flex-wrap items-center gap-3 pt-1">
+        <button
+          type="submit"
+          disabled={!canSubmit}
+          className="inline-flex items-center justify-center gap-2 rounded-xl px-6 py-3 text-base font-semibold text-white shadow-sm transition focus:outline-none disabled:cursor-not-allowed disabled:opacity-45"
+          style={{ background: brandPrimary }}
+          onMouseEnter={(e) => {
+            if (!e.currentTarget.disabled) e.currentTarget.style.opacity = '0.92'
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.opacity = ''
+          }}
+        >
+          {submitting
+            ? 'Submitting…'
+            : isSurvey
+              ? 'Request my survey'
+              : 'Request my report'}
+        </button>
+        <p className="text-sm" style={{ color: 'var(--ss-t4)' }}>
+          * Required fields
+        </p>
+      </div>
+    </form>
+  )
+}
+
 // ─── CTA row ──────────────────────────────────────────────────────────────────────
 
 function CtaRow({
   installerName,
   brandPrimary,
   surveyOptions,
+  installerSlug,
+  leadJourney,
+  optionSet,
+  prefill,
 }: {
   installerName: string
   brandPrimary: string
   surveyOptions?: ResultsSurveyOptions
+  installerSlug: string
+  leadJourney: LeadJourney
+  optionSet: OptionSet
+  prefill: { addressRaw: string; postcode: string }
 }) {
-  const [confirmed, setConfirmed] = useState(false)
+  const [openForm, setOpenForm] = useState<LeadOutcome | null>(null)
 
-  if (confirmed) {
+  if (openForm) {
     return (
-      <div
-        className="space-y-1.5 rounded-xl p-4"
-        style={{ background: 'var(--ss-s1)', border: '1.5px solid var(--ss-border)' }}
-      >
-        <p className="text-sm font-medium" style={{ color: 'var(--ss-t1)' }}>
-          Thanks — {installerName} will be in touch.
-        </p>
-        <p className="text-sm" style={{ color: 'var(--ss-t3)' }}>
-          To make your estimate more accurate, have a recent electricity bill or annual
-          kWh figure handy. {surveyModeLabel(surveyOptions)}
-        </p>
-      </div>
+      <LeadForm
+        outcome={openForm}
+        installerName={installerName}
+        brandPrimary={brandPrimary}
+        surveyOptions={surveyOptions}
+        installerSlug={installerSlug}
+        leadJourney={leadJourney}
+        optionSet={optionSet}
+        prefill={prefill}
+        onCancel={() => setOpenForm(null)}
+      />
     )
   }
 
@@ -348,7 +766,7 @@ function CtaRow({
     <div className="flex flex-wrap items-center gap-3">
       <button
         type="button"
-        onClick={() => setConfirmed(true)}
+        onClick={() => setOpenForm('report')}
         className="inline-flex items-center justify-center gap-2 rounded-xl px-6 py-3 text-base font-semibold text-white shadow-sm transition focus:outline-none"
         style={{ background: brandPrimary }}
         onMouseEnter={(e) => {
@@ -362,7 +780,7 @@ function CtaRow({
       </button>
       <button
         type="button"
-        onClick={() => setConfirmed(true)}
+        onClick={() => setOpenForm('survey')}
         className="inline-flex items-center justify-center gap-2 rounded-xl px-5 py-3 text-base font-medium transition focus:outline-none"
         style={{ color: 'var(--ss-t2)', border: '1.5px solid var(--ss-border-h)' }}
         onMouseEnter={(e) => {
@@ -385,6 +803,9 @@ export function ResultsView({
   installerName,
   brandPrimary,
   surveyOptions,
+  installerSlug,
+  leadJourney,
+  prefill,
 }: ResultsViewProps) {
   const { options, warnings } = optionSet
 
@@ -438,6 +859,10 @@ export function ResultsView({
         installerName={installerName}
         brandPrimary={brandPrimary}
         surveyOptions={surveyOptions}
+        installerSlug={installerSlug}
+        leadJourney={leadJourney}
+        optionSet={optionSet}
+        prefill={prefill}
       />
 
       {/* Footer */}

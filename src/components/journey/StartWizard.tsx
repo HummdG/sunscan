@@ -20,7 +20,34 @@ import { ExistingStep } from './steps/ExistingStep'
 import { MotivationStep } from './steps/MotivationStep'
 import { GhostButton, PrimaryButton } from './ui'
 import { ResultsView } from './ResultsView'
+import type { LeadJourney } from './ResultsView'
 import type { OptionSet } from '@/lib/recommend/optionTypes'
+
+// Build the lead API journey payload from the reducer state. Only called from
+// the results screen, which is only reachable once address + roof are present.
+function buildLeadJourney(state: JourneyState): LeadJourney {
+  return {
+    uprn: state.address?.uprn,
+    roof: {
+      confidence: state.roof?.confidence ?? 'low',
+      maxPanelCount: state.roof?.maxPanelCount ?? 0,
+      kwpPotential: state.roof?.kwpPotential ?? 0,
+    },
+    propertyType: state.propertyType ?? 'other',
+    ownership: state.ownership ?? 'other',
+    usage: {
+      source: state.usage.source,
+      annualKwh: state.usage.annualKwh,
+      monthlyCostGbp: state.usage.monthlyCostGbp,
+    },
+    tariffType: state.tariffType,
+    existing: state.existing,
+    lifestyle: state.lifestyle,
+    motivation: state.motivation,
+    budgetBandId: state.budgetBandId,
+    financeInterest: state.financeInterest,
+  }
+}
 
 // ─── Props ────────────────────────────────────────────────────────────────────
 
@@ -265,6 +292,12 @@ export function StartWizard({
           installerName={installerName}
           brandPrimary={brand.primary}
           surveyOptions={surveyOptions}
+          installerSlug={installerSlug}
+          leadJourney={buildLeadJourney(state)}
+          prefill={{
+            addressRaw: state.address?.raw ?? '',
+            postcode: state.address?.postcode ?? '',
+          }}
         />
       </div>
     )
