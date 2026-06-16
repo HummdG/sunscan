@@ -100,6 +100,13 @@ export default async function AdminLeadsPage({
             <span className="text-xs" style={{ color: 'var(--ss-t3)' }}>
               {session.email}
             </span>
+            <Link
+              href="/admin/settings"
+              className="ss-mono text-[10px] uppercase"
+              style={{ letterSpacing: '0.18em', color: 'var(--ss-t3)' }}
+            >
+              Settings
+            </Link>
             <SignOutButton />
           </div>
         </div>
