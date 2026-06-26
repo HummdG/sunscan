@@ -10,8 +10,8 @@ import {
   calcAnnualGeneration,
   calcSystemSizeKw,
 } from '@/lib/solarCalculations'
-import { estimateRoofPlanes, getBestRoofPlane, wgs84ToLocalMetres, polygonCentroid, polygonArea } from '@/lib/geometry'
-import { calculatePanelLayout } from '@/lib/panelLayout'
+import { estimateRoofCapacity } from '@/lib/recommend/roofCapacity'
+import type { RoofCapacity } from '@/lib/recommend/roofCapacity'
 import { generateReportPdf, generateQuoteNumber } from '@/lib/reportGenerator'
 import { selectOptimalPanelConfig } from '@/lib/googleSolarApi'
 import { loadCatalogue, CATALOGUE_VERSION } from '@/lib/pricing/catalogueLoader'
@@ -168,7 +168,7 @@ export async function POST(request: NextRequest) {
     let panelCount = 0
     let systemSizeKw = 0
     let panelSpec: PanelSpec = DEFAULT_PANEL
-    let panelPositions: ReturnType<typeof calculatePanelLayout>['positions'] = []
+    let panelPositions: RoofCapacity['positions'] = []
     let solarInsights: GoogleSolarBuildingInsights | null = null
     let solarCoveragePercent: number | null = null
     let imageryQuality: string | null = null
@@ -236,20 +236,16 @@ export async function POST(request: NextRequest) {
 
       const geojson = JSON.parse(data.footprintGeojson) as { type: string; coordinates: number[][][] }
       const ring = geojson.coordinates[0] as [number, number][]
-      const centre = polygonCentroid(ring)
-      const footprintLocal = wgs84ToLocalMetres(ring, centre)
-      if (polygonArea(footprintLocal) < 10) {
+      const capacity = estimateRoofCapacity(ring, assumptions.roofPitchDeg, DEFAULT_PANEL)
+      if (capacity.count < 1) {
         return reject(
           'no-roof-data',
           'The detected building footprint is too small to size a system. Please confirm the roof on the Review step.',
         )
       }
 
-      const roofPlanes = estimateRoofPlanes(footprintLocal, assumptions.roofPitchDeg)
-      const bestPlane = getBestRoofPlane(roofPlanes)
-      const layout = calculatePanelLayout(bestPlane, DEFAULT_PANEL)
-      panelCount = layout.count
-      panelPositions = layout.positions
+      panelCount = capacity.count
+      panelPositions = capacity.positions
       systemSizeKw = calcSystemSizeKw(panelCount, DEFAULT_PANEL)
       panelSpec = DEFAULT_PANEL
     }

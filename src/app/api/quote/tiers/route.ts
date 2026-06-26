@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 import { loadCatalogue } from '@/lib/pricing/catalogueLoader'
 import { computeQuote } from '@/lib/pricing/computeQuote'
-import { buildTierPresets, inclusionsForTier } from '@/lib/pricing/tiers'
+import { buildInclusions, buildTierPresets } from '@/lib/pricing/tiers'
 import type { PricingContext, TierPresetSummary } from '@/lib/pricing/types'
 
 const BodySchema = z.object({
@@ -37,7 +37,7 @@ export async function POST(req: NextRequest) {
       totalPounds: quote.totalPounds,
       panelCount: config.panelCount,
       kwp: pvRow?.kwp ?? 0,
-      inclusions: inclusionsForTier(tier),
+      inclusions: buildInclusions(config, catalogue),
     }
   })
 

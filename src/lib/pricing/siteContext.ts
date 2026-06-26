@@ -17,12 +17,15 @@ const FLAT_ROOF_PITCH_THRESHOLD_DEG = 10
  *
  * - Roof type: 'flat' if pitch < 10°, else 'pitched'.
  * - Storey scaffolding: charge per storey above 2 (eave height proxy).
- * - Panel cap: prefer Google Solar maxArrayPanelsCount, fall back to layout estimate.
+ * - Panel cap: use the realistic capacity the caller computed (Google usable
+ *   faces, else single-plane footprint estimate); default only when that is 0.
+ *   We deliberately do NOT use Google's `maxArrayPanelsCount` here — it packs
+ *   every roof face incl. north slopes/outbuildings and grossly overstates it.
  */
 export function deriveSiteContext(
   osBuilding: OsBuilding | null,
   solarInsights: GoogleSolarBuildingInsights | null,
-  panelLayoutMaxPanels: number,
+  realisticMaxPanels: number,
 ): SiteContext {
   const pitch =
     osBuilding?.roofPitchDeg ??
@@ -38,9 +41,7 @@ export function deriveSiteContext(
     suggestedExtras.push({ sku: 'SCAFFOLD-EXTRA-STOREY', quantity: extraStoreys })
   }
 
-  const roofMaxPanels =
-    solarInsights?.solarPotential.maxArrayPanelsCount ??
-    (panelLayoutMaxPanels > 0 ? panelLayoutMaxPanels : DEFAULT_MAX_PANELS)
+  const roofMaxPanels = realisticMaxPanels > 0 ? realisticMaxPanels : DEFAULT_MAX_PANELS
 
   return { roofType, suggestedExtras, roofMaxPanels: Math.max(1, Math.round(roofMaxPanels)) }
 }

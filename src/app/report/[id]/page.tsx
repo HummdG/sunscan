@@ -2,12 +2,26 @@ import { notFound } from 'next/navigation'
 import { prisma } from '@/lib/db'
 import { ReportPreview } from '@/components/ReportPreview'
 import { SystemConfigurator } from '@/components/SystemConfigurator'
+import { ReportBudgetExplorer } from '@/components/budget/ReportBudgetExplorer'
 import { SunscanMark } from '@/components/SunscanMark'
 import { hydrateReportData } from '@/lib/reportData'
 import { loadCatalogue } from '@/lib/pricing/catalogueLoader'
 import { computeQuote } from '@/lib/pricing/computeQuote'
+import { buildBudgetLadder } from '@/lib/recommend/buildBudgetLadder'
+import type { OptionSetInput } from '@/lib/recommend/optionTypes'
+import type { BudgetLadder } from '@/lib/recommend/ladderTypes'
 import type { RoofType, SystemConfig, Tier } from '@/lib/pricing/types'
+import type { GoogleSolarBuildingInsights, SolarAssumptions } from '@/lib/types'
 import { createClient } from '@supabase/supabase-js'
+
+// Lead.existingSolar (new|upgrade|retrofit|optimisation) → journey ExistingSystem,
+// inverting the lead route's EXISTING_MAP so the ladder's battery affinity is faithful.
+const EXISTING_REVERSE: Record<string, string> = {
+  new: 'none',
+  upgrade: 'solar',
+  retrofit: 'battery',
+  optimisation: 'solar_battery',
+}
 
 async function getSignedPdfUrl(pdfPath: string | null): Promise<string | null> {
   if (!pdfPath) return null
@@ -49,7 +63,7 @@ export default async function ReportPage({ params }: Props) {
   const { id } = await params
   const report = await prisma.report.findUnique({
     where: { id },
-    include: { configuration: true },
+    include: { configuration: true, lead: true, installer: { include: { branding: true } } },
   })
 
   if (!report) notFound()
@@ -82,6 +96,51 @@ export default async function ReportPage({ params }: Props) {
     roofType,
   })
 
+  // ── Budget ladder for the slider ──
+  // Built from the report's persisted physics + financials, with battery-affinity
+  // context recovered from the linked Lead (neutral when there is no lead). Uses the
+  // same default catalogue and raw (margin-free) pricing as the configurator on this
+  // page so the slider's prices match what saving a step recomputes.
+  const fullAssumptions = JSON.parse(report.assumptionsJson) as SolarAssumptions
+  const lead = report.lead
+  const solarInsights = report.solarApiJson
+    ? (JSON.parse(report.solarApiJson) as GoogleSolarBuildingInsights)
+    : null
+  const ladderInput: OptionSetInput = {
+    catalogue,
+    roofMaxPanels: Math.max(lead?.maxPanelCount ?? 0, report.panelCount, 12),
+    roofType,
+    pitchDeg: fullAssumptions.roofPitchDeg ?? 35,
+    mcsOrientationDeg: fullAssumptions.roofOrientationDeg ?? 0,
+    solarInsights,
+    annualKwh: report.annualKwh,
+    importTariffPence: report.tariffPencePerKwh,
+    exportTariffPence: report.exportTariffPencePerKwh,
+    tariffType: lead?.tariffType ?? 'unknown',
+    lifestyle: lead?.lifestyleTags ?? [],
+    motivation: lead?.motivation ?? null,
+    existing: lead ? (EXISTING_REVERSE[lead.existingSolar] ?? null) : null,
+    sentinelConfig: null,
+    mcsZone: report.mcsZone,
+    irradianceKwhPerM2: report.irradianceKwhPerM2,
+    shadingLoss: fullAssumptions.shadingLoss ?? 0.05,
+    inverterLoss: fullAssumptions.inverterLoss ?? 0.03,
+    systemLoss: fullAssumptions.systemLoss ?? 0.1,
+    energyInflationRate: fullAssumptions.energyInflationRate ?? 0.03,
+    panelDegradationPerYear: fullAssumptions.panelDegradationPerYear ?? 0.005,
+    minPanels: 6,
+    maxPanels: 50,
+    marginPercent: 0,
+    budgetMaxGbp: initialQuote.totalPounds,
+  }
+  let ladder: BudgetLadder | null = null
+  try {
+    ladder = buildBudgetLadder(ladderInput)
+  } catch {
+    ladder = null
+  }
+  const brandPrimary = report.installer?.branding?.primaryColor ?? '#1d4ed8'
+
   return (
     <main className="min-h-screen" style={{ background: 'linear-gradient(180deg, #FAF6EC 0%, #F4ECD6 100%)' }}>
       <header
@@ -111,7 +170,15 @@ export default async function ReportPage({ params }: Props) {
         </div>
       </header>
 
-      <div className="max-w-4xl mx-auto px-4 pt-6">
+      <div className="max-w-4xl mx-auto px-4 pt-6 space-y-6">
+        {ladder ? (
+          <ReportBudgetExplorer
+            reportId={report.id}
+            ladder={ladder}
+            brandPrimary={brandPrimary}
+            initialBudgetGbp={initialQuote.totalPounds}
+          />
+        ) : null}
         <SystemConfigurator
           reportId={report.id}
           initialConfig={initialConfig}

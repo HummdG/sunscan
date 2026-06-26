@@ -75,6 +75,25 @@ export function computeQuote(config: SystemConfig, ctx: PricingContext): QuoteBr
     })
   }
 
+  // ── 2.5 Inverter ──────────────────────────────────────────────────────────
+  // Inverters seed at £0 (bundled into PV base). When an installer prices a
+  // specific inverter, the non-default choice surfaces as its own line item.
+  if (config.inverterSku) {
+    const inverter = catalogue.inverters.find((i) => i.sku === config.inverterSku)
+    if (!inverter) {
+      warnings.push(`Unknown inverterSku: ${config.inverterSku} — no inverter line added.`)
+    } else if (inverter.priceGbp > 0) {
+      lineItems.push({
+        sku: inverter.sku,
+        category: 'electrical',
+        label: `${inverter.modelName} (${inverter.ratedKw} kW)`,
+        quantity: 1,
+        unitGbp: inverter.priceGbp,
+        totalGbp: inverter.priceGbp,
+      })
+    }
+  }
+
   // ── 3. Mounting ─────────────────────────────────────────────────────────
   const mounting = catalogue.mounting.find((m) => m.sku === config.mountingSku)
   if (mounting) {

@@ -1,74 +1,21 @@
-import {
-  DEFAULT_ASSUMPTIONS,
-  DEFAULT_PANEL,
-  runSolarCalculations,
-  runSolarCalculationsFromGoogleData,
-} from '@/lib/solarCalculations'
-import { computeQuote } from '@/lib/pricing/computeQuote'
-import { buildTierPresets, inclusionsForTier } from '@/lib/pricing/tiers'
-import type { PricingCatalogue, PricingContext, SystemConfig } from '@/lib/pricing/types'
-import type { PanelSpec, SolarAssumptions, SolarResults } from '@/lib/types'
-import { computeSentinel, computeSentinelUplift } from './sentinel'
+import { buildInclusions, buildTierPresets } from '@/lib/pricing/tiers'
+import type { PricingContext, SystemConfig } from '@/lib/pricing/types'
+import { computeSentinel } from './sentinel'
+import { buildBudgetLadder } from './buildBudgetLadder'
+import { evaluateConfig, type CandidateEval } from './evaluateConfig'
 import type { OptionKind, OptionResult, OptionSet, OptionSetInput, PresetTier } from './optionTypes'
 
-// ─── Scoring (ported from the proven sales-branch engine) ────────────────────
-// Primary objective: net 25-year value (£). Penalties nudge away from systems
-// that pay back too slowly or export a lot of cheap surplus (i.e. oversized).
-const PAYBACK_TARGET_YEARS = 12
-const PAYBACK_PENALTY_PER_YEAR = 150
-const EXPORT_PENALTY_PER_KWH = 0.04
 const PV_MAX_PANELS = 50 // computeQuote requires a pvBasePrice row in [1, 50]
-const TIERS: PresetTier[] = ['essential', 'standard', 'premium']
+// Tiers in ascending size/capability order — also the order options are shown.
+const TIER_ORDER: PresetTier[] = ['essential', 'standard', 'premium']
+// Each shown option must differ from its neighbour by at least this many panels
+// (where the roof allows) so the three never collapse into near-identical sizes.
+const MIN_PANEL_GAP = 2
+// How far around a tier's demand anchor the scorer may search for a count.
+const COUNT_BAND = 0.25
 
-function net25YearValue(r: SolarResults): number {
-  const s = r.twentyFiveYearSavings
-  return s.length ? s[s.length - 1].cumulative : 0
-}
-
-function scoreOf(r: SolarResults): number {
-  const paybackPenalty = Math.max(0, r.paybackYears - PAYBACK_TARGET_YEARS) * PAYBACK_PENALTY_PER_YEAR
-  const exportPenalty = r.exportKwh * EXPORT_PENALTY_PER_KWH
-  return net25YearValue(r) - paybackPenalty - exportPenalty
-}
-
-function panelSpecFor(catalogue: PricingCatalogue, sku: string): PanelSpec {
-  const p =
-    catalogue.panels.find((x) => x.sku === sku) ??
-    catalogue.panels.find((x) => x.isBase) ??
-    catalogue.panels[0]
-  if (!p) return DEFAULT_PANEL
-  return {
-    widthMm: p.widthMm,
-    heightMm: p.heightMm,
-    depthMm: p.depthMm,
-    wattPeak: p.wattPeak,
-    modelName: p.modelName,
-  }
-}
-
-function batteryKwhFor(catalogue: PricingCatalogue, config: SystemConfig): number {
-  if (!config.battery) return 0
-  const b = catalogue.batteries.find((x) => x.sku === config.battery!.sku)
-  if (!b) return 0
-  const expansion = (b.expansionCapacityKwh ?? 0) * (config.battery.expansionUnits ?? 0)
-  return b.baseCapacityKwh + expansion
-}
-
-interface Candidate {
+interface Candidate extends CandidateEval {
   tier: PresetTier
-  config: SystemConfig
-  panelCount: number
-  systemKwp: number
-  priceGbp: number
-  hasBattery: boolean
-  batteryKwh: number
-  results: SolarResults
-  score: number
-  warnings: string[]
-}
-
-function sig(c: Candidate): string {
-  return `${c.tier}:${c.panelCount}`
 }
 
 function makeCandidate(
@@ -79,74 +26,7 @@ function makeCandidate(
   ctx: PricingContext,
 ): Candidate {
   const config: SystemConfig = { ...base, panelCount: count }
-  const quote = computeQuote(config, ctx)
-  const priceGbp = Math.round(quote.totalPounds * (1 + input.marginPercent))
-
-  const hasBattery = !!config.battery
-  const batteryKwh = batteryKwhFor(input.catalogue, config)
-
-  const assumptions: SolarAssumptions = {
-    ...DEFAULT_ASSUMPTIONS,
-    roofPitchDeg: input.pitchDeg,
-    roofOrientationDeg: input.mcsOrientationDeg,
-    shadingLoss: input.shadingLoss,
-    inverterLoss: input.inverterLoss,
-    systemLoss: input.systemLoss,
-    exportTariffPencePerKwh: input.exportTariffPence,
-    energyInflationRate: input.energyInflationRate,
-    panelDegradationPerYear: input.panelDegradationPerYear,
-    hasBattery,
-    batteryKwh,
-    systemCostPounds: priceGbp,
-  }
-
-  const configs = input.solarInsights?.solarPotential.solarPanelConfigs
-  let results: SolarResults
-  if (configs && configs.length) {
-    const ref = configs.reduce((best, c) =>
-      Math.abs(c.panelsCount - count) < Math.abs(best.panelsCount - count) ? c : best,
-    )
-    const perPanelDc = ref.yearlyEnergyDcKwh / Math.max(1, ref.panelsCount)
-    results = runSolarCalculationsFromGoogleData(
-      perPanelDc * count,
-      count,
-      input.solarInsights!.solarPotential.panelCapacityWatts,
-      input.annualKwh,
-      input.importTariffPence,
-      assumptions,
-    )
-  } else {
-    results = runSolarCalculations(
-      count,
-      panelSpecFor(input.catalogue, config.panelSku),
-      input.irradianceKwhPerM2,
-      input.annualKwh,
-      input.importTariffPence,
-      assumptions,
-    )
-  }
-
-  const pvRow = input.catalogue.pvBasePrice.find((r) => r.panelCount === count)
-  const panel = input.catalogue.panels.find((p) => p.sku === config.panelSku)
-  const systemKwp = pvRow?.kwp ?? Math.round((count * (panel?.wattPeak ?? 430)) / 10) / 100
-
-  // A modest Sentinel-potential nudge: systems that unlock more optimisation
-  // (battery + smart tariff + EV/heat-pump) score slightly higher.
-  const uplift = computeSentinelUplift(hasBattery, input.tariffType, input.lifestyle, input.sentinelConfig)
-  const score = scoreOf(results) + uplift * net25YearValue(results) * 0.25
-
-  return {
-    tier,
-    config,
-    panelCount: count,
-    systemKwp,
-    hasBattery,
-    batteryKwh,
-    priceGbp,
-    results,
-    score,
-    warnings: quote.warnings,
-  }
+  return { tier, ...evaluateConfig(config, input, ctx) }
 }
 
 const LABELS: Record<OptionKind, string> = {
@@ -154,10 +34,17 @@ const LABELS: Record<OptionKind, string> = {
   better_value: 'Better value',
   recommended: 'Recommended',
 }
-const BEST_SUITED: Record<OptionKind, string> = {
-  budget_fit: 'A practical entry point that stays closest to your stated budget.',
-  better_value: 'A stronger balance of cost, performance and payback.',
-  recommended: 'Maximising long-term savings, performance and return on investment.',
+// Each option maps 1:1 to a tier, so the benefit framing is keyed by tier (the
+// actual hardware), not by price position — genuinely differentiated pitches.
+const HEADLINE: Record<PresetTier, string> = {
+  essential: 'Lowest upfront cost',
+  standard: 'Best all-round value',
+  premium: 'Maximum self-sufficiency',
+}
+const BEST_SUITED: Record<PresetTier, string> = {
+  essential: 'A practical entry system focused on the lowest upfront cost and a quick payback.',
+  standard: 'The best all-round balance of generation, storage and long-term return.',
+  premium: 'Maximum generation, storage and self-sufficiency for the strongest lifetime savings.',
 }
 const NEXT_STEP: Record<OptionKind, string> = {
   budget_fit: 'Book a free survey to confirm this is right for your home.',
@@ -168,7 +55,12 @@ const KINDS_BY_PRICE: OptionKind[] = ['budget_fit', 'better_value', 'recommended
 
 function toOption(c: Candidate, kind: OptionKind, isRecommended: boolean, input: OptionSetInput): OptionResult {
   const panel = input.catalogue.panels.find((p) => p.sku === c.config.panelSku)
-  const inv = input.catalogue.inverters.find((i) => i.isDefault) ?? input.catalogue.inverters[0]
+  const inv =
+    (c.config.inverterSku
+      ? input.catalogue.inverters.find((i) => i.sku === c.config.inverterSku)
+      : undefined) ??
+    input.catalogue.inverters.find((i) => i.isDefault) ??
+    input.catalogue.inverters[0]
   const battery = c.config.battery
     ? input.catalogue.batteries.find((b) => b.sku === c.config.battery!.sku)
     : null
@@ -198,8 +90,9 @@ function toOption(c: Candidate, kind: OptionKind, isRecommended: boolean, input:
     priceGbp: c.priceGbp,
     results: c.results,
     sentinel,
-    inclusions: inclusionsForTier(c.tier),
-    bestSuitedTo: BEST_SUITED[kind],
+    inclusions: buildInclusions(c.config, input.catalogue),
+    headline: HEADLINE[c.tier],
+    bestSuitedTo: BEST_SUITED[c.tier],
     nextStep: NEXT_STEP[kind],
     score: c.score,
     warnings: c.warnings,
@@ -209,9 +102,14 @@ function toOption(c: Candidate, kind: OptionKind, isRecommended: boolean, input:
 }
 
 /**
- * Build the three presented options (Budget-fit / Better value / Recommended)
- * from a fully-resolved input. Always returns exactly 3 distinct options ordered
- * by price ascending; `isRecommended` marks the highest-scoring of the three.
+ * Build the three presented options from a fully-resolved input.
+ *
+ * Each option maps 1:1 to a tier (essential / standard / premium) so its
+ * hardware — panel, inverter, battery, backup — is genuinely distinct. Within
+ * each tier the scorer picks the best panel count in a band around the tier's
+ * demand anchor, then a minimum-gap pass spreads the three apart (where the roof
+ * allows) so they never bunch into near-identical sizes. Options are returned
+ * price-ascending; `isRecommended` marks the highest-scoring of the three.
  */
 export function buildOptionSet(input: OptionSetInput): OptionSet {
   const ctx: PricingContext = {
@@ -222,58 +120,55 @@ export function buildOptionSet(input: OptionSetInput): OptionSet {
   }
   const presets = buildTierPresets(ctx)
 
-  const minP = Math.max(1, input.minPanels)
-  const maxP = Math.max(minP, Math.min(input.roofMaxPanels, input.maxPanels, PV_MAX_PANELS))
+  const roofCap = Math.max(1, Math.min(input.roofMaxPanels, input.maxPanels, PV_MAX_PANELS))
+  const floor = Math.max(1, Math.min(input.minPanels, roofCap))
+  const clamp = (n: number) => Math.min(roofCap, Math.max(floor, n))
 
-  const candidates: Candidate[] = []
-  for (const tier of TIERS) {
+  // Best-scoring panel count within a band around the tier's demand anchor.
+  const bestForTier = (tier: PresetTier): Candidate => {
     const base = presets[tier]
-    for (let count = minP; count <= maxP; count++) {
-      candidates.push(makeCandidate(base, tier, count, input, ctx))
+    const anchor = clamp(base.panelCount)
+    const lo = clamp(Math.floor(anchor * (1 - COUNT_BAND)))
+    const hi = clamp(Math.ceil(anchor * (1 + COUNT_BAND)))
+    let best: Candidate | undefined
+    for (let count = lo; count <= hi; count++) {
+      const c = makeCandidate(base, tier, count, input, ctx)
+      if (!best || c.score > best.score) best = c
     }
+    return best ?? makeCandidate(base, tier, anchor, input, ctx)
   }
 
-  // ── Select 3 distinct anchors ──
-  const within = candidates.filter((c) => c.priceGbp <= input.budgetMaxGbp)
-  // Budget-fit: most panels within budget (tie → cheaper); else the cheapest overall.
-  const budgetFit = (within.length ? within : candidates)
-    .slice()
-    .sort((a, b) =>
-      within.length ? b.panelCount - a.panelCount || a.priceGbp - b.priceGbp : a.priceGbp - b.priceGbp,
-    )[0]
-  // Recommended: best score overall.
-  const recommended = candidates.reduce((best, c) => (c.score > best.score ? c : best))
-
-  const chosen: Candidate[] = []
-  const seen = new Set<string>()
-  const add = (c: Candidate | undefined) => {
-    if (c && !seen.has(sig(c))) {
-      seen.add(sig(c))
-      chosen.push(c)
-    }
-  }
-  add(budgetFit)
-  add(recommended)
-
-  // Better-value: best score strictly between the two anchor prices.
-  if (chosen.length < 3) {
-    const lo = Math.min(...chosen.map((c) => c.priceGbp))
-    const hi = Math.max(...chosen.map((c) => c.priceGbp))
-    const middle = candidates
-      .filter((c) => !seen.has(sig(c)) && c.priceGbp > lo && c.priceGbp < hi)
-      .sort((a, b) => b.score - a.score)[0]
-    add(middle)
-  }
-  // Backfill to exactly 3 distinct, spread across the price range.
-  if (chosen.length < 3) {
-    for (const c of candidates.slice().sort((a, b) => a.priceGbp - b.priceGbp)) {
-      if (chosen.length >= 3) break
-      add(c)
-    }
+  const picks: Record<PresetTier, Candidate> = {
+    essential: bestForTier('essential'),
+    standard: bestForTier('standard'),
+    premium: bestForTier('premium'),
   }
 
-  // Order by price; label by position; highlight the best-scoring of the three.
-  const ordered = chosen.slice(0, 3).sort((a, b) => a.priceGbp - b.priceGbp)
+  // ── Enforce a minimum size gap so the three never bunch together ──
+  // Push each tier above the previous by MIN_PANEL_GAP, then clamp back down to
+  // the roof (preserving the gap where there's room). On a roof too small to
+  // separate all three, counts converge but the tiers still differ by hardware.
+  let eCount = picks.essential.panelCount
+  let sCount = Math.max(picks.standard.panelCount, eCount + MIN_PANEL_GAP)
+  let pCount = Math.max(picks.premium.panelCount, sCount + MIN_PANEL_GAP)
+  pCount = clamp(pCount)
+  sCount = clamp(Math.min(sCount, pCount - MIN_PANEL_GAP))
+  eCount = clamp(Math.min(eCount, sCount - MIN_PANEL_GAP))
+
+  const finalCounts: Record<PresetTier, number> = {
+    essential: eCount,
+    standard: sCount,
+    premium: pCount,
+  }
+
+  // Re-evaluate at the gap-adjusted counts, then order by price for labelling.
+  const ordered = TIER_ORDER.map((tier) =>
+    finalCounts[tier] === picks[tier].panelCount
+      ? picks[tier]
+      : makeCandidate(presets[tier], tier, finalCounts[tier], input, ctx),
+  ).sort((a, b) => a.priceGbp - b.priceGbp)
+
+  // Highlight the best-scoring of the three.
   let recIdx = 0
   ordered.forEach((c, i) => {
     if (c.score > ordered[recIdx].score) recIdx = i
@@ -293,5 +188,6 @@ export function buildOptionSet(input: OptionSetInput): OptionSet {
       budgetMaxGbp: input.budgetMaxGbp,
     },
     warnings,
+    ladder: buildBudgetLadder(input),
   }
 }

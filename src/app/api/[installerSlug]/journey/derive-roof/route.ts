@@ -3,6 +3,7 @@ import { z } from 'zod'
 import { fetchBuildingInsights } from '@/lib/googleSolarApi'
 import { fetchBuilding } from '@/lib/osApi'
 import { deriveGeometry } from '@/lib/recommend/deriveGeometry'
+import { estimateRoofCapacity, usableGoogleSolarPanelCount } from '@/lib/recommend/roofCapacity'
 import { deriveSiteContext } from '@/lib/pricing/siteContext'
 import { resolveInstaller } from '@/lib/tenant/resolveInstaller'
 import { rateLimit } from '@/lib/rateLimit'
@@ -50,8 +51,15 @@ export async function POST(
   ])
 
   const geometry = deriveGeometry(insights, osBuilding)
-  const panelLayoutMaxPanels = osBuilding ? Math.max(6, Math.round(osBuilding.areaM2 / 4)) : 0
-  const { roofType, roofMaxPanels } = deriveSiteContext(osBuilding, insights, panelLayoutMaxPanels)
+  // Realistic capacity: prefer Google's panel count on the *usable* (south/E/W)
+  // faces of its best layout — never its whole-roof `maxArrayPanelsCount`, which
+  // packs every face incl. north slopes/outbuildings. Fall back to a single-plane
+  // grid-pack of the primary footprint ring when Google has no layout data.
+  const footprintCap = osBuilding
+    ? estimateRoofCapacity(osBuilding.footprintPolygon, geometry.pitchDeg).count
+    : 0
+  const realisticMax = usableGoogleSolarPanelCount(insights) || footprintCap
+  const { roofType, roofMaxPanels } = deriveSiteContext(osBuilding, insights, realisticMax)
 
   const panelW = insights?.solarPotential.panelCapacityWatts ?? 430
   const kwpPotential = Math.round((roofMaxPanels * panelW) / 10) / 100

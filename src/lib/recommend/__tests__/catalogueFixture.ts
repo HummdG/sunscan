@@ -2,10 +2,11 @@ import type { PricingCatalogue } from '@/lib/pricing/types'
 import type { OptionSetInput } from '../optionTypes'
 
 /**
- * Compact but complete-enough catalogue for engine tests: includes every SKU the
- * tier presets reference (DMEGC base + REA premium panels, Fox batteries, pitched
- * mounting, Tigo/bird-mesh/EPS/admin extras) so computeQuote prices cleanly.
- * PV base price is synthetic but strictly monotonic in panel count.
+ * Compact but complete-enough catalogue for engine tests. Covers all three
+ * product classes for panels (budget/standard/premium), inverters and batteries
+ * so the catalogue-driven tier selection can pick distinct hardware per tier,
+ * plus pitched mounting and Tigo/bird-mesh/EPS/admin extras so computeQuote
+ * prices cleanly. PV base price is synthetic but strictly monotonic in count.
  */
 export function makeTestCatalogue(): PricingCatalogue {
   const pvBasePrice = Array.from({ length: 50 }, (_, i) => {
@@ -17,10 +18,13 @@ export function makeTestCatalogue(): PricingCatalogue {
     version: 'test',
     panels: [
       { sku: 'DMEGC-DM430', modelName: 'DMEGC 430W', manufacturer: 'DMEGC', wattPeak: 430, widthMm: 1134, heightMm: 1722, depthMm: 30, upliftType: 'base', upliftValue: 0, productTier: 'budget', isBase: true, sortOrder: 1 },
+      { sku: 'DMEGC-DM455', modelName: 'DMEGC 455W', manufacturer: 'DMEGC', wattPeak: 455, widthMm: 1134, heightMm: 1722, depthMm: 30, upliftType: 'percent', upliftValue: 0.075, productTier: 'standard', isBase: false, sortOrder: 2 },
       { sku: 'REA-HD96-460', modelName: 'REA 460W Bifacial', manufacturer: 'REA', wattPeak: 460, widthMm: 1134, heightMm: 1722, depthMm: 30, upliftType: 'percent', upliftValue: 0.08, productTier: 'premium', isBase: false, sortOrder: 3 },
     ],
     inverters: [
-      { sku: 'INV-STD', modelName: 'Standard Hybrid 5kW', manufacturer: 'Test', ratedKw: 5, efficiency: 0.97, productTier: 'standard', priceGbp: 0, isDefault: true, sortOrder: 1 },
+      { sku: 'INV-BUDGET', modelName: 'Budget Hybrid 3.7kW', manufacturer: 'Test', ratedKw: 3.7, efficiency: 0.97, productTier: 'budget', priceGbp: 0, isDefault: false, sortOrder: 1 },
+      { sku: 'INV-STD', modelName: 'Standard Hybrid 5kW', manufacturer: 'Test', ratedKw: 5, efficiency: 0.97, productTier: 'standard', priceGbp: 0, isDefault: true, sortOrder: 2 },
+      { sku: 'INV-PREM', modelName: 'Premium Hybrid 8kW', manufacturer: 'Test', ratedKw: 8, efficiency: 0.975, productTier: 'premium', priceGbp: 0, isDefault: false, sortOrder: 3 },
     ],
     pvBasePrice,
     mounting: [
@@ -53,6 +57,8 @@ export function makeInput(overrides: Partial<OptionSetInput> = {}): OptionSetInp
     exportTariffPence: 15,
     tariffType: 'standard',
     lifestyle: [],
+    motivation: null,
+    existing: null,
     sentinelConfig: null,
     mcsZone: '1',
     irradianceKwhPerM2: 950,

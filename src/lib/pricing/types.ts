@@ -10,6 +10,8 @@ export interface SystemConfig {
   panelSku: string
   panelCount: number
   mountingSku: string
+  /** Inverter SKU for this configuration. Falls back to the catalogue default when unset. */
+  inverterSku?: string
   battery: {
     sku: string
     expansionUnits: number

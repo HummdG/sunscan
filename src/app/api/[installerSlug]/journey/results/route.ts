@@ -40,6 +40,8 @@ const Body = z.object({
   }),
   tariffType: z.string().nullable().optional(),
   lifestyle: z.array(z.string()).optional(),
+  motivation: z.string().nullable().optional(),
+  existing: z.string().nullable().optional(),
   budgetBandId: z.string().nullable(),
 })
 type BodyT = z.infer<typeof Body>
@@ -91,7 +93,7 @@ export async function POST(
   const exportPence = b.usage.exportTariffPence ?? regional.segExportPencePerKwh
 
   // Geometry: trust the modelled roof, override from fallback answers when low-confidence.
-  let pitchDeg = b.roof.pitchDeg
+  const pitchDeg = b.roof.pitchDeg
   let mcsOrientationDeg = b.roof.mcsOrientationDeg
   let maxPanelCount = b.roof.maxPanelCount
   let shadingLoss = cfg?.shadingLoss ?? 0.05
@@ -133,6 +135,8 @@ export async function POST(
     exportTariffPence: exportPence,
     tariffType: b.tariffType ?? 'unknown',
     lifestyle: b.lifestyle ?? [],
+    motivation: b.motivation ?? null,
+    existing: b.existing ?? null,
     sentinelConfig,
     mcsZone,
     irradianceKwhPerM2,

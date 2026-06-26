@@ -3,6 +3,9 @@
 import { useId, useMemo, useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
 import type { OptionResult, OptionSet } from '@/lib/recommend/optionTypes'
+import type { BudgetStep } from '@/lib/recommend/ladderTypes'
+import { BudgetExplorer } from '@/components/budget/BudgetExplorer'
+import { lifetimeSavings } from '@/components/budget/format'
 import { TextField } from './ui'
 
 // ─── Props ────────────────────────────────────────────────────────────────────
@@ -50,9 +53,9 @@ interface ResultsViewProps {
 // ─── Copy ─────────────────────────────────────────────────────────────────────
 
 const INTRO_COPY =
-  'Based on your property, roof layout, energy usage and budget, your home may be ' +
-  'suitable for solar and battery storage. We’ve created three indicative options ' +
-  'to help you compare cost, performance and long-term value.'
+  'Based on your property, roof layout, energy usage and goals, your home may be ' +
+  'suitable for solar and battery storage. Move the budget slider to see how your ' +
+  'lifetime savings and recommended system change — we tailor what’s added to your answers.'
 
 const DISCLAIMER_COPY =
   'This is an indicative estimate only. A final recommendation depends on a roof survey, ' +
@@ -205,6 +208,12 @@ function OptionCardView({
           <Mono>{option.label}</Mono>
           {recommended ? <RecommendedBadge brandPrimary={brandPrimary} /> : null}
         </div>
+        <p
+          className="ss-heading text-base font-semibold leading-tight"
+          style={{ color: 'var(--ss-t1)' }}
+        >
+          {option.headline}
+        </p>
         <div className="flex items-end justify-between gap-3">
           <p
             className="ss-heading text-2xl font-semibold tracking-tight"
@@ -461,12 +470,29 @@ function ConsentCheckbox({
   )
 }
 
+/** Compact summary of the budget the homeowner landed on, for the installer/PDF. */
+function selectedStepSummary(step: BudgetStep | null) {
+  if (!step) return undefined
+  return {
+    tier: step.config.tier,
+    priceGbp: step.priceGbp,
+    panelCount: step.panelCount,
+    systemKwp: step.systemKwp,
+    hasBattery: step.hasBattery,
+    batteryKwh: step.batteryKwh,
+    annualSavingsPounds: Math.round(step.results.annualSavingsPounds),
+    lifetimeSavingsPounds: Math.round(lifetimeSavings(step.results.twentyFiveYearSavings)),
+    config: step.config,
+  }
+}
+
 function buildLeadBody(
   outcome: LeadOutcome,
   surveyType: SurveyType | null,
   contact: ContactForm,
   leadJourney: LeadJourney,
   optionSet: OptionSet,
+  selectedStep: BudgetStep | null,
 ) {
   return {
     outcome,
@@ -485,6 +511,7 @@ function buildLeadBody(
     },
     journey: leadJourney,
     optionSet: { recommendedId: optionSet.recommendedId, options: optionSet.options },
+    selectedStep: selectedStepSummary(selectedStep),
   }
 }
 
@@ -496,6 +523,7 @@ function LeadForm({
   installerSlug,
   leadJourney,
   optionSet,
+  selectedStep,
   prefill,
   onCancel,
 }: {
@@ -506,6 +534,7 @@ function LeadForm({
   installerSlug: string
   leadJourney: LeadJourney
   optionSet: OptionSet
+  selectedStep: BudgetStep | null
   prefill: { addressRaw: string; postcode: string }
   onCancel: () => void
 }) {
@@ -532,7 +561,7 @@ function LeadForm({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(
-          buildLeadBody(outcome, surveyType, contact, leadJourney, optionSet),
+          buildLeadBody(outcome, surveyType, contact, leadJourney, optionSet, selectedStep),
         ),
       })
       if (!res.ok) throw new Error(`Lead request failed (${res.status})`)
@@ -743,6 +772,7 @@ function CtaRow({
   installerSlug,
   leadJourney,
   optionSet,
+  selectedStep,
   prefill,
 }: {
   installerName: string
@@ -751,6 +781,7 @@ function CtaRow({
   installerSlug: string
   leadJourney: LeadJourney
   optionSet: OptionSet
+  selectedStep: BudgetStep | null
   prefill: { addressRaw: string; postcode: string }
 }) {
   const [openForm, setOpenForm] = useState<LeadOutcome | null>(null)
@@ -765,6 +796,7 @@ function CtaRow({
         installerSlug={installerSlug}
         leadJourney={leadJourney}
         optionSet={optionSet}
+        selectedStep={selectedStep}
         prefill={prefill}
         onCancel={() => setOpenForm(null)}
       />
@@ -816,7 +848,8 @@ export function ResultsView({
   leadJourney,
   prefill,
 }: ResultsViewProps) {
-  const { options, warnings } = optionSet
+  const { options, warnings, ladder } = optionSet
+  const [selectedStep, setSelectedStep] = useState<BudgetStep | null>(null)
 
   return (
     <div className="space-y-10">
@@ -826,7 +859,7 @@ export function ResultsView({
           className="ss-heading text-2xl sm:text-[1.9rem] leading-tight font-semibold tracking-tight"
           style={{ color: 'var(--ss-t1)' }}
         >
-          Your three indicative options
+          See what you could save
         </h2>
         <p className="text-base leading-relaxed" style={{ color: 'var(--ss-t2)' }}>
           {INTRO_COPY}
@@ -835,6 +868,16 @@ export function ResultsView({
           {DISCLAIMER_COPY}
         </p>
       </header>
+
+      {/* Budget explorer — savings hero + slider (the primary interaction) */}
+      {ladder ? (
+        <BudgetExplorer
+          ladder={ladder}
+          brandPrimary={brandPrimary}
+          initialBudgetGbp={optionSet.context.budgetMaxGbp}
+          onStepChange={setSelectedStep}
+        />
+      ) : null}
 
       {/* Warnings */}
       {warnings.length > 0 ? (
@@ -850,12 +893,15 @@ export function ResultsView({
         </ul>
       ) : null}
 
-      {/* Option cards */}
-      <div className="grid grid-cols-1 gap-5 lg:grid-cols-3">
-        {options.map((o) => (
-          <OptionCardView key={o.id} option={o} brandPrimary={brandPrimary} />
-        ))}
-      </div>
+      {/* The three named packages — reference points behind the slider */}
+      <section className="space-y-3">
+        <Mono>Compare the packages</Mono>
+        <div className="grid grid-cols-1 gap-5 lg:grid-cols-3">
+          {options.map((o) => (
+            <OptionCardView key={o.id} option={o} brandPrimary={brandPrimary} />
+          ))}
+        </div>
+      </section>
 
       {/* Comparison table */}
       <section className="space-y-3">
@@ -871,6 +917,7 @@ export function ResultsView({
         installerSlug={installerSlug}
         leadJourney={leadJourney}
         optionSet={optionSet}
+        selectedStep={selectedStep}
         prefill={prefill}
       />
 

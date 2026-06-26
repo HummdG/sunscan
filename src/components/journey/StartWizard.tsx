@@ -232,6 +232,8 @@ export function StartWizard({
         },
         tariffType: state.tariffType,
         lifestyle: state.lifestyle,
+        motivation: state.motivation,
+        existing: state.existing,
         budgetBandId: state.budgetBandId,
       }
       const res = await fetch(`/api/${installerSlug}/journey/results`, {

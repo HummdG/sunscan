@@ -13,6 +13,7 @@ const SystemConfigSchema = z.object({
   panelSku: z.string(),
   panelCount: z.number().int().min(1).max(50),
   mountingSku: z.string(),
+  inverterSku: z.string().optional(),
   battery: z
     .object({
       sku: z.string(),

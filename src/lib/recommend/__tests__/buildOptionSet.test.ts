@@ -56,4 +56,32 @@ describe('buildOptionSet', () => {
       expect(Number.isFinite(o.results.paybackYears)).toBe(true)
     }
   })
+
+  it('differentiates hardware across tiers when the catalogue supports it', () => {
+    const set = buildOptionSet(makeInput())
+    // Distinct panel, inverter and a distinct battery story per option.
+    expect(new Set(set.options.map((o) => o.config.panelSku)).size).toBe(3)
+    expect(new Set(set.options.map((o) => o.inverterType)).size).toBe(3)
+    // Exactly one option (essential) has no battery; the others differ in capacity.
+    const batteries = set.options.map((o) => o.batteryType)
+    expect(batteries.filter((b) => b === null)).toHaveLength(1)
+    // Each option has a distinct headline benefit framing.
+    expect(new Set(set.options.map((o) => o.headline)).size).toBe(3)
+  })
+
+  it('spreads the three options apart on a normal roof (minimum size gap)', () => {
+    const set = buildOptionSet(makeInput({ roofMaxPanels: 20, maxPanels: 20 }))
+    const counts = set.options.map((o) => o.panelCount).sort((a, b) => a - b)
+    expect(new Set(counts).size).toBe(3)
+    expect(counts[1] - counts[0]).toBeGreaterThanOrEqual(2)
+    expect(counts[2] - counts[1]).toBeGreaterThanOrEqual(2)
+  })
+
+  it('attaches a budget ladder with tier stops for the slider', () => {
+    const set = buildOptionSet(makeInput())
+    expect(set.ladder).toBeDefined()
+    expect(set.ladder!.steps.length).toBeGreaterThanOrEqual(1)
+    expect(set.ladder!.tierStops).toHaveLength(3)
+    expect(set.ladder!.minGbp).toBeLessThanOrEqual(set.ladder!.maxGbp)
+  })
 })

@@ -89,6 +89,9 @@ const Body = z.object({
     financeInterest: z.string().nullable(),
   }),
   optionSet: z.object({ recommendedId: z.string(), options: z.array(OptionSchema) }),
+  // The budget the homeowner landed on with the slider (optional). When present,
+  // the gated PDF is generated for the option nearest that budget.
+  selectedStep: z.object({ priceGbp: z.number() }).passthrough().nullable().optional(),
 })
 type BodyT = z.infer<typeof Body>
 
@@ -281,7 +284,17 @@ export async function POST(
       b.optionSet.options.find((o) => o.kind === b.optionSet.recommendedId) ??
       b.optionSet.options.find((o) => o.isRecommended) ??
       b.optionSet.options[0]
-    if (recommended) {
+    // Prefer the option nearest the homeowner's slider choice; else the recommended one.
+    const chosen =
+      b.selectedStep && b.optionSet.options.length
+        ? b.optionSet.options.reduce((best, o) =>
+            Math.abs(o.priceGbp - b.selectedStep!.priceGbp) <
+            Math.abs(best.priceGbp - b.selectedStep!.priceGbp)
+              ? o
+              : best,
+          )
+        : recommended
+    if (chosen) {
       try {
         const regional = getTariffForPostcode(b.contact.postcode)
         const mcsZone = getZoneForPostcode(b.contact.postcode)
@@ -312,18 +325,18 @@ export async function POST(
             energyInflationRate: cfg?.energyInflationRate ?? DEFAULT_ASSUMPTIONS.energyInflationRate,
             panelDegradationPerYear:
               cfg?.panelDegradationPerYear ?? DEFAULT_ASSUMPTIONS.panelDegradationPerYear,
-            hasBattery: !!recommended.batteryType,
-            batteryKwh: recommended.batteryCapacityKwh,
-            systemCostPounds: recommended.priceGbp,
+            hasBattery: !!chosen.batteryType,
+            batteryKwh: chosen.batteryCapacityKwh,
+            systemCostPounds: chosen.priceGbp,
           },
           option: {
-            panelCount: recommended.panelCount,
-            systemKwp: recommended.systemKwp,
-            panelType: recommended.panelType,
-            inverterType: recommended.inverterType,
-            batteryType: recommended.batteryType ?? null,
-            batteryCapacityKwh: recommended.batteryCapacityKwh,
-            results: recommended.results as unknown as SolarResults,
+            panelCount: chosen.panelCount,
+            systemKwp: chosen.systemKwp,
+            panelType: chosen.panelType,
+            inverterType: chosen.inverterType,
+            batteryType: chosen.batteryType ?? null,
+            batteryCapacityKwh: chosen.batteryCapacityKwh,
+            results: chosen.results as unknown as SolarResults,
           },
         })
         reportUrl = gen.pdfUrl

@@ -1,6 +1,7 @@
 import type { GoogleSolarBuildingInsights, SolarResults } from '@/lib/types'
 import type { PricingCatalogue, RoofType, SystemConfig, Tier } from '@/lib/pricing/types'
 import type { SentinelConfig, SentinelResult } from './sentinel'
+import type { BudgetLadder } from './ladderTypes'
 
 export type PresetTier = Exclude<Tier, 'custom'>
 export type OptionKind = 'budget_fit' | 'better_value' | 'recommended'
@@ -23,6 +24,8 @@ export interface OptionResult {
   results: SolarResults
   sentinel: SentinelResult
   inclusions: string[]
+  /** Short benefit framing distinct per tier (e.g. "Lowest upfront cost"). */
+  headline: string
   bestSuitedTo: string
   nextStep: string
   score: number
@@ -47,6 +50,12 @@ export interface OptionSet {
   recommendedId: OptionKind
   context: OptionSetContext
   warnings: string[]
+  /**
+   * Continuous budget ladder for the slider — a single recommended system that
+   * morphs as the budget changes. Optional so existing consumers (lead route,
+   * tests) remain valid; populated by `buildOptionSet`.
+   */
+  ladder?: BudgetLadder
 }
 
 /**
@@ -67,6 +76,9 @@ export interface OptionSetInput {
   /** Homeowner tariff type + lifestyle tags — drive the Sentinel uplift. */
   tariffType: string
   lifestyle: string[]
+  /** Homeowner goal + existing system — feed the ladder's battery affinity. */
+  motivation: string | null
+  existing: string | null
   sentinelConfig: SentinelConfig | null
   mcsZone: string
   irradianceKwhPerM2: number
